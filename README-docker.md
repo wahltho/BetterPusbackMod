@@ -7,21 +7,23 @@
 that's it 
 
 ## Settings
-in ```build_xpl.sh``` set the paths of the current project and the libacfutils lib
-
+Keep the source checkout under `~/Documents/Projects/BPB`, but stage builds
+into the local workspace at `~/dev/BPB`:
 
 ```
-# Set here the correct paths
-# docker's internal path /xpl_dev is mapped 1 level up from the current folder
-# the libacfutils folder is expected to be at the same level of this projet, if not
-# modify docket-compose.yml accordingly. 
-
-# Host folders         | Internal docker folders
-# ---------------------|---------------------
-# ../projets/          | /xpl_dev/
-# ├─ libacfutils/      | ├── libacfutils/
-# └─ BetterPusbackMod/ | └── BetterPusbackMod/
-
-PROJECT_PATH='BetterPusbackMod'
+cd ~/Documents/Projects/BPB
+./workbench/sync_local_workspace.sh
 ```
 
+Then run Docker against `~/dev/BPB` instead of the iCloud-backed source tree:
+
+```
+docker run --rm --platform linux/amd64 \
+  -e BPB_BUILD_ROOT=/xpl_dev \
+  -e BPB_LOCAL_WORKSPACE=/xpl_dev \
+  -v ~/dev/BPB:/xpl_dev \
+  -v ~/dev/BPB:/work \
+  -w /xpl_dev/BetterPusbackMod-main \
+  bpb-cross \
+  bash -lc "./build_xpl.sh"
+```

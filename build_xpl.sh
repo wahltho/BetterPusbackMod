@@ -15,6 +15,16 @@
 
 # Copyright 2022 Saso Kiselkov. All rights reserved.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -z "${BPB_SKIP_LOCAL_REEXEC:-}" ]] && \
+    [[ -f "${SCRIPT_DIR}/../workbench/local_build_common.sh" ]]; then
+	# shellcheck source=../workbench/local_build_common.sh
+	source "${SCRIPT_DIR}/../workbench/local_build_common.sh"
+	bpb_maybe_reexec_script "${BASH_SOURCE[0]}" "$@"
+fi
+
+cd "${SCRIPT_DIR}"
+
 #########################################################################
 # Set here the correct path
 # docker's interval path /xpl_dev is mapped one level up the current folder

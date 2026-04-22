@@ -15,6 +15,14 @@
 
 # Copyright 2022 Saso Kiselkov. All rights reserved.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+if [[ -z "${BPB_SKIP_LOCAL_REEXEC:-}" ]] && \
+    [[ -f "${SCRIPT_DIR}/../workbench/local_build_common.sh" ]]; then
+	# shellcheck source=../workbench/local_build_common.sh
+	source "${SCRIPT_DIR}/../workbench/local_build_common.sh"
+	bpb_maybe_reexec_script "${BASH_SOURCE[0]}" "$@"
+fi
+
 # Some Cleanup's
 
 # Delivery File Name
@@ -150,6 +158,8 @@ function install_override_files() {
 	done
 }
 
+
+cd "${SCRIPT_DIR}"
 
 rm -rf BetterPushback
 mkdir -p BetterPushback

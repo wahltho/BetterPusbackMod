@@ -34,6 +34,12 @@ https://github.com/olivierbutler/BetterPusbackMod/releases
 
 ## Building BetterPushback
 
+This checkout is intended to stay as the authoritative source tree. Build
+artifacts now live under `~/dev/BPB` by default so the iCloud-backed source
+directory stays free of generated output. Run `../workbench/sync_local_workspace.sh`
+to refresh the local workspace, or use `../workbench/relocate_build_artifacts.sh`
+once to move any existing build output there.
+
 To build BetterPushback, check to see you have the pre-requisites installed. The
 Linux and Windows versions are built in one step on an Ubuntu 16.04 (or
 compatible) machine and the Mac version is obviously built on macOS (10.9
@@ -61,7 +67,7 @@ This build only the .xpl file. (option described above can be used)
 ```
 $ ./install_xplane.sh
 ```
-Copy the .xpl files to the x-plane and change the quarantine attribute of the ```mac.xpl``` file.  
+Copy the .xpl files to the x-plane and change the quarantine attribute of the ```mac.xpl``` file. The script prefers artifacts from `~/dev/BPB/BetterPusbackMod-main` if present.
 In the script, just set ```XPLANE_PLUGIN_DIR``` accordingly. 
 ***
 
