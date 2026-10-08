@@ -35,6 +35,7 @@
 #include "cfg.h"
 #include "ground_ops_ui.h"
 #include "msg.h"
+#include "release_version.h"
 #include "ui_runtime.h"
 #include "ui_click_sound.h"
 #include "xplane.h"
@@ -1701,7 +1702,7 @@ void fetchGitVersion(void) {
     } else {
       parse_response(response.response, gitHubVersion.version);
       gitHubVersion.new_version_available =
-          (strcmp(gitHubVersion.version, BP_PLUGIN_VERSION) != 0);
+          bp_release_version_is_newer(gitHubVersion.version, BP_PLUGIN_VERSION);
       logMsg(BP_INFO_LOG 
           "current version %s / new available version %s / update available %s",
           BP_PLUGIN_VERSION, gitHubVersion.version,
