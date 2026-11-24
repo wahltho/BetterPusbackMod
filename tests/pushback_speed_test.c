@@ -166,8 +166,14 @@ char *mkpathname(const char *first, ...)
     return strdup(last_telemetry_path);
 }
 bool_t file_exists(const char *path, bool_t *isdir)
-{ struct stat st; if (stat(path, &st)) return B_FALSE;
-  if (isdir) *isdir = S_ISDIR(st.st_mode); return B_TRUE; }
+{
+    struct stat st;
+    if (stat(path, &st))
+        return B_FALSE;
+    if (isdir)
+        *isdir = S_ISDIR(st.st_mode);
+    return B_TRUE;
+}
 bool_t create_directory_recursive(const char *path)
 { (void)path; assert(!"Test directory must already exist"); return B_FALSE; }
 #include "speed_publication.inc"
