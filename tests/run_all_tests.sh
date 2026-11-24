@@ -3,6 +3,9 @@ set -eu
 
 test_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
+python3 "$test_dir/run_reload_safety_tests.py"
+python3 "$test_dir/run_pushback_speed_tests.py"
+
 for runner in \
     run_airport_cache_manifest_tests.sh \
     run_emergency_tow_tests.sh \

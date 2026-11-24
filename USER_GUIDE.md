@@ -191,6 +191,33 @@ There is no timeout-based disconnect; use **Abort pushback** if an input never
 returns below the threshold. Successful handoff and final cleanup do not write
 a synthetic zero over pilot brake input.
 
+### Pushback speed factor
+
+The separate **Pushback speed factor** selection, directly below Fast Ground
+Handling, offers **Normal (1x)**, **1.5x** and **2x**. Normal is the default.
+Choose **Save preferences** to keep the value across restarts. It applies to
+the next operation, not an operation already underway, and works independently
+of Fast Ground Handling, interface choice and saved-route preferences.
+
+This raises the cruising-speed limit on accepted automatic pushback and tow
+routes, including automatic Emergency Tow. It does not accelerate manual
+towing, tug approach/departure, lifting or disconnect. Loaded-tug speed caps,
+turning limits, acceleration, braking and the parking-brake handoff still
+apply. Tight turns, short routes or a slower tug may give little or no speed
+increase; **2x does not guarantee half the total time**. Stopping from a higher
+speed can take more distance. Normal (1x) uses the original driving path.
+
+Saving/reloading preferences is blocked until the operation has fully ended,
+including after Stop while the tug is still disconnecting. A reload request
+that becomes unsafe before execution is discarded, not deferred until later.
+
+Diagnostic telemetry's existing `effective_max_*_speed_mps` values describe
+longitudinal cruising limits before dynamic limits, not guaranteed actual or
+tug speeds. Slave-side values are local and do not synchronize the master's
+factor. Distribution builds keep runtime telemetry disabled by default.
+When diagnostic recording is enabled, a changed movement profile starts a new
+CSV segment so its metadata stays correct across automatic/manual switches.
+
 ## 5. Saved routes
 
 The default-off **Legacy route recall** preference selects the original

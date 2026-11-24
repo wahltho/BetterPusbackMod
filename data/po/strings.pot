@@ -398,7 +398,22 @@ msgstr ""
 msgid "Fast Ground Handling"
 msgstr ""
 
-msgid "Skip artificial ground handling waits and animations, including disconnect after parking brake set. Brake checks, towing and tug travel keep normal behavior."
+msgid "Skip artificial ground handling waits and animations, including disconnect after parking brake set. Does not change towing speed; use Pushback speed factor separately. Brake checks remain unchanged."
+msgstr ""
+
+msgid "Pushback speed factor"
+msgstr ""
+
+msgid "Normal (1x)"
+msgstr ""
+
+msgid "1.5x"
+msgstr ""
+
+msgid "2x"
+msgstr ""
+
+msgid "Raises the cruising-speed limit of automatic pushback and towing. Tug, turn and stopping limits still apply. Does not change manual towing or ground handling. 2x does not guarantee half the total time. Saved changes apply to the next operation."
 msgstr ""
 
 #: src/bp.c:3433 src/bp.c:3437 src/bp.c:3454 src/bp.c:3456 src/bp.c:3457

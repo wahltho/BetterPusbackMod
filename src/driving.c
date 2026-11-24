@@ -72,11 +72,13 @@ static int compute_segs_impl(const vehicle_t *veh, vect2_t start_pos,
 
 static double turn_run_speed(const vehicle_t *veh, list_t *segs, double rhdg,
                              double radius, bool_t backward, const seg_t *next,
-                             bool_t *out_decelerating);
+                             bool_t *out_decelerating,
+                             const drive_speed_limits_t *limits);
 
 static double straight_run_speed(const vehicle_t *veh, list_t *segs,
                                  double rmng_d, bool_t backward, const seg_t *next,
-                                 bool_t *out_decelerating);
+                                 bool_t *out_decelerating,
+                                 const drive_speed_limits_t *limits);
 
 static int
 construct_segs_oblique(const vehicle_t *veh, vect2_t start_pos,
@@ -429,16 +431,17 @@ drive_on_line(const vehicle_pos_t *pos, const vehicle_t *veh,
 
 static double
 next_seg_speed(const vehicle_t *veh, list_t *segs, const seg_t *next,
-               bool_t cur_backward) {
+               bool_t cur_backward, const drive_speed_limits_t *limits) {
     if (next != NULL && next->backward == cur_backward) {
         if (next->type == SEG_TYPE_STRAIGHT) {
             return (straight_run_speed(veh, segs, next->len,
-                                       next->backward, list_next(segs, next), NULL));
+                                       next->backward, list_next(segs, next), NULL,
+                                       limits));
         } else {
             return (turn_run_speed(veh, segs,
                                    rel_hdg(next->start_hdg, next->end_hdg),
                                    next->turn.r, next->backward,
-                                   list_next(segs, next), NULL));
+                                   list_next(segs, next), NULL, limits));
         }
     } else {
         /*
@@ -458,10 +461,11 @@ next_seg_speed(const vehicle_t *veh, list_t *segs, const seg_t *next,
  */
 static double
 turn_run_speed(const vehicle_t *veh, list_t *segs, double rhdg, double radius,
-               bool_t backward, const seg_t *next, bool_t *out_decelerating) {
+               bool_t backward, const seg_t *next, bool_t *out_decelerating,
+               const drive_speed_limits_t *limits) {
     double rmng_d = (2 * M_PI * radius) * (rhdg / 360.0);
     double spd = straight_run_speed(veh, segs, rmng_d,
-                                    backward, next, out_decelerating);
+                                    backward, next, out_decelerating, limits);
     double rmng_t = rmng_d / spd;
     double ang_vel = rhdg / rmng_t;
     double centr_accel;
@@ -495,12 +499,15 @@ turn_run_speed(const vehicle_t *veh, list_t *segs, double rhdg, double radius,
  */
 static double
 straight_run_speed(const vehicle_t *veh, list_t *segs, double rmng_d,
-                   bool_t backward, const seg_t *next, bool_t *out_decelerating) {
+                   bool_t backward, const seg_t *next, bool_t *out_decelerating,
+                   const drive_speed_limits_t *limits) {
     double next_spd, cruise_spd, spd, crawl_spd;
     double ts[2];
 
-    next_spd = next_seg_speed(veh, segs, next, backward);
-    cruise_spd = (backward ? veh->max_rev_spd : veh->max_fwd_spd);
+    next_spd = next_seg_speed(veh, segs, next, backward, limits);
+    cruise_spd = (limits != NULL ?
+        (backward ? limits->rev_mps : limits->fwd_mps) :
+        (backward ? veh->max_rev_spd : veh->max_fwd_spd));
     crawl_spd = CRAWL_SPEED(bp_xp_ver, veh);
 
     if (rmng_d < crawl_spd)
@@ -614,10 +621,10 @@ turn_run(const vehicle_pos_t *pos, const vehicle_t *veh, const seg_t *seg,
                   3, B_TRUE, last_mis_hdg, d_t, out_steer, out_speed);
 }
 
-bool_t
-drive_segs(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
+static bool_t
+drive_segs_impl(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
            double *last_mis_hdg, double d_t, double *out_steer, double *out_speed,
-           bool_t *out_decelerating) {
+           bool_t *out_decelerating, const drive_speed_limits_t *limits) {
     seg_t *seg = list_head(segs);
     vect2_t fixed_pos = veh_pos2fixed_pos(pos, veh);
 
@@ -628,7 +635,8 @@ drive_segs(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
         double len = vect2_dotprod(vect2_sub(fixed_pos, seg->start_pos),
                                    dir);
         double speed = straight_run_speed(veh, segs, seg->len - len,
-                                          seg->backward, list_next(segs, seg), out_decelerating);
+                                          seg->backward, list_next(segs, seg), out_decelerating,
+                                          limits);
         double hdg = (!seg->backward ? seg->start_hdg :
                       normalize_hdg(seg->start_hdg + 180));
 
@@ -649,7 +657,8 @@ drive_segs(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
         double end_brg = fabs(rel_hdg(end_hdg, dir2hdg(
                 vect2_sub(fixed_pos, seg->end_pos))));
         double speed = turn_run_speed(veh, segs, ABS(rhdg), seg->turn.r,
-                                      seg->backward, list_next(segs, seg), out_decelerating);
+                                      seg->backward, list_next(segs, seg), out_decelerating,
+                                      limits);
 
         /*
          * Segment complete when we are past the end_pos point
@@ -671,6 +680,25 @@ drive_segs(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
     *out_steer = STEER_GATE(*out_steer, veh->max_steer);
 
     return (B_TRUE);
+}
+
+bool_t
+drive_segs(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
+    double *last_mis_hdg, double d_t, double *out_steer, double *out_speed,
+    bool_t *out_decelerating)
+{
+    return drive_segs_impl(pos, veh, segs, last_mis_hdg, d_t, out_steer,
+        out_speed, out_decelerating, NULL);
+}
+
+bool_t
+drive_segs_with_speed_limits(const vehicle_pos_t *pos, const vehicle_t *veh,
+    list_t *segs, double *last_mis_hdg, double d_t, double *out_steer,
+    double *out_speed, bool_t *out_decelerating,
+    const drive_speed_limits_t *limits)
+{
+    return drive_segs_impl(pos, veh, segs, last_mis_hdg, d_t, out_steer,
+        out_speed, out_decelerating, limits);
 }
 
 double

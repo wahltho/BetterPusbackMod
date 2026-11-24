@@ -39,6 +39,7 @@ extern conf_t *bp_conf;
 
 bool_t bp_legacy_routes(void);
 bool_t bp_fast_ground_handling(void);
+double bp_pushback_speed_factor(void);
 
 typedef struct {
     bool_t monitor_found; // to clear before the search

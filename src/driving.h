@@ -29,6 +29,7 @@
 #include <acfutils/avl.h>
 #include <acfutils/list.h>
 #include <acfutils/geom.h>
+#include "pushback_speed.h"
 
 #ifdef    __cplusplus
 extern "C" {
@@ -149,6 +150,11 @@ int compute_segs(const vehicle_t *veh, vect2_t start_pos, double start_hdg,
 bool_t drive_segs(const vehicle_pos_t *pos, const vehicle_t *veh, list_t *segs,
                   double *last_mis_hdg, double d_t, double *out_steer, double *out_speed,
                   bool_t *out_decelerating);
+
+bool_t drive_segs_with_speed_limits(const vehicle_pos_t *pos,
+    const vehicle_t *veh, list_t *segs, double *last_mis_hdg, double d_t,
+    double *out_steer, double *out_speed, bool_t *out_decelerating,
+    const drive_speed_limits_t *limits);
 
 double ang_vel_speed_limit(const vehicle_t *veh, double steer, double speed);
 

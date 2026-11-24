@@ -75,6 +75,7 @@ typedef struct {
  */
 typedef struct {
     vehicle_t veh;            /* our driving params */
+    double automatic_push_speed_factor; /* fixed for this operation */
     acf_t acf;            /* aux params of aircraft gear */
 
     struct {

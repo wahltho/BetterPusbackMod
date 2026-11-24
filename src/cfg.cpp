@@ -30,6 +30,8 @@
 #include <acfutils/assert.h>
 #include <acfutils/dr.h>
 #include <acfutils/intl.h>
+#include <ctype.h>
+#include <stdlib.h>
 
 #include "bp.h"
 #include "cfg.h"
@@ -156,8 +158,13 @@ const char *legacy_routes_tooltip =
     "The newer saved gate slots remain unchanged.";
 const char *fast_ground_handling_tooltip =
     "Skip artificial ground handling waits and animations, including "
-    "disconnect after parking brake set. Brake checks, towing and tug travel "
-    "keep normal behavior.";
+    "disconnect after parking brake set. Does not change towing speed; "
+    "use Pushback speed factor separately. Brake checks remain unchanged.";
+const char *pushback_speed_tooltip =
+    "Raises the cruising-speed limit of automatic pushback and towing. "
+    "Tug, turn and stopping limits still apply. Does not change manual "
+    "towing or ground handling. 2x does not guarantee half the total time. "
+    "Saved changes apply to the next operation.";
 const char *disco_when_done_tooltip =
     "Never ask and always automatically disconnect "
     "the tug when the pushback operation is complete.";
@@ -296,6 +303,12 @@ comboList_t_ *hide_magic_squares_global_list_ = nullptr;
 comboList_t hide_magic_squares_global_list = {hide_magic_squares_global_list_, 0, "##hide_magic_global", 0};
 
 
+static bool_t
+preferences_save_allowed(bool_t disabled)
+{
+  return !disabled && !bp_started && !planner_open;
+}
+
 class SettingsWindow : public XPImgWindow {
 public:
   SettingsWindow(WndMode _mode = WND_MODE_FLOAT_CENTERED);
@@ -329,6 +342,7 @@ private:
   bool_t always_connect_tug_first;
   bool_t legacy_routes;
   bool_t fast_ground_handling;
+  int pushback_speed_selection;
   bool_t per_aircraft_is_global;
   bool_t xp11_only;
   bool_t is_destroy;
@@ -343,6 +357,7 @@ private:
   int hide_magic_squares_global;
   const char *radio_dev, *sound_dev, *plg_to_exclude, *plg_acf_to_exclude;
   void LoadConfig(void);
+  void SaveConfig(void);
   void sound_comboList_init(comboList_t *list);
   void plugin_comboList_init(comboList_t *list, bool_t only_aircraft);
   void doorscheck_comboList_init(comboList_t *list);
@@ -357,7 +372,8 @@ protected:
 SettingsWindow::SettingsWindow(WndMode _mode)
     : XPImgWindow(_mode, WND_STYLE_SOLID,
                   WndRect(0, MAIN_WINDOW_W, MAIN_WINDOW_H, 0)),
-      is_destroy(B_FALSE), for_credit(0), save_disabled(B_FALSE) {
+      is_destroy(B_FALSE), for_credit(0),
+      save_disabled(bp_started) {
   SetWindowTitle(_("BetterPushback Preferences"));
   SetWindowResizingLimits(MAIN_WINDOW_W, MAIN_WINDOW_H, MAIN_WINDOW_W,
                           MAIN_WINDOW_H);
@@ -436,6 +452,9 @@ void SettingsWindow::LoadConfig(void) {
 
   legacy_routes = bp_legacy_routes();
   fast_ground_handling = bp_fast_ground_handling();
+  const double speed_factor = bp_pushback_speed_factor();
+  pushback_speed_selection = (speed_factor == 2.0 ? 2 :
+                              (speed_factor == 1.5 ? 1 : 0));
 
   tug_starts_next_plane = B_FALSE;
   (void)conf_get_b(bp_conf, "tug_starts_next_plane", &tug_starts_next_plane);
@@ -1066,6 +1085,16 @@ void SettingsWindow::buildInterface() {
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
+    ImGui::Text("%s", _("Pushback speed factor"));
+    Tooltip(_(pushback_speed_tooltip));
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(combowithWidth);
+    const char *speed_choices[] = {_("Normal (1x)"), _("1.5x"), _("2x")};
+    (void)ImGui::Combo("##pushback_speed_factor", &pushback_speed_selection,
+                       speed_choices, 3);
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
     ImGui::Text("%s", _("Always connect the tug first"));
     Tooltip(_(always_connect_tug_first_tooltip));
 
@@ -1196,26 +1225,21 @@ void SettingsWindow::buildInterface() {
   }
 
   ImGui::Text(" ");
-  if (save_disabled) {
+  const bool save_blocked = !preferences_save_allowed(save_disabled);
+  if (save_blocked) {
     ImGui::BeginDisabled();
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha,
                         ImGui::GetStyle().Alpha *
                             BUTTON_DISABLED); // Reduce button opacity
   }
   bool save_button = CenterButton(_("Save preferences"));
-  if (save_disabled) {
+  if (save_blocked) {
     ImGui::PopStyleVar();
     ImGui::EndDisabled();
   }
   Tooltip(_(save_prefs_tooltip));
-  if (save_button) {
-    SetVisible(B_FALSE);
-    (void)conf_set_b(bp_conf, "legacy_route_recall", legacy_routes);
-    (void)conf_set_b(bp_conf, "fast_ground_handling", fast_ground_handling);
-    (void)bp_conf_save();
-    bp_sched_reload();
-    set_pref_widget_status(B_FALSE);
-  }
+  if (save_button)
+    SaveConfig();
 
   ImGui::Text(" ");
 
@@ -1241,6 +1265,20 @@ void SettingsWindow::buildInterface() {
   }
 
   setup_view_callback_is_alive = B_TRUE;
+}
+
+void SettingsWindow::SaveConfig(void) {
+  // Recheck at the write boundary, not only when drawing the button.
+  if (!preferences_save_allowed(save_disabled))
+    return;
+  SetVisible(B_FALSE);
+  (void)conf_set_b(bp_conf, "legacy_route_recall", legacy_routes);
+  (void)conf_set_b(bp_conf, "fast_ground_handling", fast_ground_handling);
+  conf_set_d(bp_conf, "pushback_speed_factor",
+             bp_pushback_speed_choice(pushback_speed_selection));
+  (void)bp_conf_save();
+  set_pref_widget_status(B_FALSE);
+  bp_sched_reload();
 }
 
 SettingsWindow *setup_window = nullptr;
@@ -1326,6 +1364,21 @@ bool_t bp_fast_ground_handling(void) {
   return enabled;
 }
 
+double bp_pushback_speed_factor(void) {
+  const char *value = NULL;
+  char *end;
+  if (bp_conf == NULL || !conf_get_str(bp_conf, "pushback_speed_factor", &value))
+    return 1.0;
+  const double factor = strtod(value, &end);
+  if (end == value)
+    return 1.0;
+  while (isspace((unsigned char)*end))
+    end++;
+  if (*end != '\0')
+    return 1.0;
+  return bp_pushback_speed_normalize(factor);
+}
+
 bool_t bp_conf_save(void) {
   char *path = mkpathname(CONF_DIRS, NULL);
   bool_t res = B_FALSE;
@@ -1385,7 +1438,7 @@ void bp_conf_fini(void) {
 void bp_conf_set_save_enabled(bool_t flag) {
   ASSERT(inited);
   if (setup_window) {
-    setup_window->save_disabled = flag;
+    setup_window->save_disabled = !flag;
   }
 }
 

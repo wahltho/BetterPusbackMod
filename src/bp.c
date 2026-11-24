@@ -706,6 +706,7 @@ static bool_t cfg_ignore_park_break = B_FALSE;
 
 static struct {
     bp_telemetry_t writer;
+    drive_speed_limits_t published_speed_limits;
     double route_steer_cmd_deg;
     double nosewheel_steer_request_deg;
     double target_speed_raw_mps;
@@ -1033,11 +1034,24 @@ telemetry_sanitize_name(const char *input, char *output, size_t capacity)
     }
 }
 
+static bool_t
+automatic_push_speed_limits(drive_speed_limits_t *limits)
+{
+    if (slave_mode || push_manual.active || push_manual.requested ||
+        bp_ls.tug == NULL)
+        return B_FALSE;
+    return bp_pushback_speed_profile(bp.automatic_push_speed_factor,
+        bp.veh.max_fwd_spd, bp.veh.max_rev_spd,
+        bp_ls.tug->info->max_tow_fwd_speed,
+        bp_ls.tug->info->max_tow_rev_speed, limits);
+}
+
 static void
-telemetry_start(void)
+telemetry_start_impl(bool_t reset_frame)
 {
     bp_telemetry_close(&bp_telem.writer);
-    telemetry_begin_frame();
+    if (reset_frame)
+        telemetry_begin_frame();
 
     if (!BP_ENABLE_RUNTIME_TELEMETRY)
         return;
@@ -1117,6 +1131,11 @@ telemetry_start(void)
     metadata.aircraft_max_steer_deg = bp.veh.max_steer;
     metadata.effective_max_fwd_speed_mps = bp.veh.max_fwd_spd;
     metadata.effective_max_rev_speed_mps = bp.veh.max_rev_spd;
+    drive_speed_limits_t speed_limits;
+    if (automatic_push_speed_limits(&speed_limits)) {
+        metadata.effective_max_fwd_speed_mps = speed_limits.fwd_mps;
+        metadata.effective_max_rev_speed_mps = speed_limits.rev_mps;
+    }
     metadata.push_start_accel_ramp_time_s = NAN;
     metadata.push_start_jerk_limit_mps3 = NAN;
     metadata.turn_profile_transition_m = NAN;
@@ -1136,6 +1155,8 @@ telemetry_start(void)
     metadata.tug_max_accel_mps2 = bp_ls.tug->info->max_accel;
     metadata.tug_max_decel_mps2 = bp_ls.tug->info->max_decel;
     metadata.tug_max_tractive_effort_n = bp_ls.tug->info->max_TE;
+    bp_telem.published_speed_limits.fwd_mps = metadata.effective_max_fwd_speed_mps;
+    bp_telem.published_speed_limits.rev_mps = metadata.effective_max_rev_speed_mps;
 
     if (!bp_telemetry_open(&bp_telem.writer, path, &metadata,
         TELEMETRY_SAMPLE_HZ)) {
@@ -1148,8 +1169,32 @@ telemetry_start(void)
 }
 
 static void
+telemetry_start(void)
+{
+    telemetry_start_impl(B_TRUE);
+}
+
+static void
+telemetry_refresh_speed_limits(void)
+{
+    if (!BP_ENABLE_RUNTIME_TELEMETRY || bp_telem.writer.fp == NULL)
+        return;
+    drive_speed_limits_t limits;
+    if (!automatic_push_speed_limits(&limits)) {
+        limits.fwd_mps = bp.veh.max_fwd_spd;
+        limits.rev_mps = bp.veh.max_rev_spd;
+    }
+    if (limits.fwd_mps != bp_telem.published_speed_limits.fwd_mps ||
+        limits.rev_mps != bp_telem.published_speed_limits.rev_mps) {
+        /* Keep CSV metadata truthful after a mode switch; preserve this frame. */
+        telemetry_start_impl(B_FALSE);
+    }
+}
+
+static void
 telemetry_record(bool_t force)
 {
+    telemetry_refresh_speed_limits();
     if (!BP_ENABLE_RUNTIME_TELEMETRY || bp_telem.writer.fp == NULL)
         return;
 
@@ -2259,6 +2304,7 @@ bp_state_init(void) {
         bp.veh.max_steer = (max_steer_angle() + MIN_STEER_ANGLE) / 2;
     bp.veh.max_fwd_spd = MAX_FWD_SPEED;
     bp.veh.max_rev_spd = MAX_REV_SPEED;
+    bp.automatic_push_speed_factor = 1.0;
     bp.veh.max_fwd_ang_vel = MAX_FWD_ANG_VEL;
     bp.veh.max_rev_ang_vel = MAX_REV_ANG_VEL;
     bp.veh.max_centr_accel = MAX_CENTR_ACCEL;
@@ -2711,6 +2757,7 @@ bp_start(void) {
         return (B_FALSE);
     }
 
+    bp.automatic_push_speed_factor = bp_pushback_speed_factor();
     bp_gather();
     bp.last_pos = bp.cur_pos;
     bp.last_t = bp.cur_t;
@@ -3016,8 +3063,19 @@ bp_run_push(bool_t hold_requested) {
             bp.reverse_t = 0.0;
         }
         corr_pos = corr_acf_pos();
-        if (drive_segs(&corr_pos, &bp.veh, &bp.segs,
-                       &bp.last_mis_hdg, bp.d_t, &steer, &speed, &decel)) {
+        drive_speed_limits_t limits;
+        bool_t have_limits = automatic_push_speed_limits(&limits);
+        if (bp.automatic_push_speed_factor > 1 && !have_limits) {
+            logMsg(BP_WARN_LOG "Invalid automatic push speed limits; "
+                "using legacy speed for this operation");
+            bp.automatic_push_speed_factor = 1.0;
+        }
+        bool_t driving = have_limits ?
+            drive_segs_with_speed_limits(&corr_pos, &bp.veh, &bp.segs,
+                &bp.last_mis_hdg, bp.d_t, &steer, &speed, &decel, &limits) :
+            drive_segs(&corr_pos, &bp.veh, &bp.segs,
+                &bp.last_mis_hdg, bp.d_t, &steer, &speed, &decel);
+        if (driving) {
             double nw_defl;
 
             bp_telem.route_steer_cmd_deg = steer;
@@ -3040,6 +3098,11 @@ bp_run_push(bool_t hold_requested) {
              */
             nw_defl = rel_hdg(bp.cur_pos.hdg, bp_ls.tug->pos.hdg);
             speed /= MAX(cos(DEG2RAD(nw_defl)), 0.1);
+            if (have_limits) {
+                speed = bp_pushback_speed_tug_cap(speed,
+                    bp_ls.tug->info->max_tow_fwd_speed,
+                    bp_ls.tug->info->max_tow_rev_speed);
+            }
             if (hold_requested) {
                 /*
                  * Keep running route and steering control while slowing so

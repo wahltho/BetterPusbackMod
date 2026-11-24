@@ -1658,6 +1658,12 @@ bp_do_reload(float u1, float u2, int u3, void *u4)
     }
     if (reload_rqst)
     {
+        if (bp_started || planner_open || get_pref_widget_status()) {
+            reload_rqst = B_FALSE;
+            logMsg(BP_WARN_LOG "Discarding reload request: BetterPushback "
+                "is no longer idle");
+            return (0);
+        }
         bp_nosewheel_status_invalidate(BP_NW_CORE_RELOAD);
         bp_priv_disable();
         VERIFY(bp_priv_enable());
@@ -1668,6 +1674,11 @@ bp_do_reload(float u1, float u2, int u3, void *u4)
 
 void bp_sched_reload(void)
 {
+    if (bp_started || planner_open) {
+        logMsg(BP_WARN_LOG "Ignoring reload request while operation or "
+            "planner is active");
+        return;
+    }
     reload_rqst = B_TRUE;
     ASSERT(reload_floop_ID != NULL);
     XPLMScheduleFlightLoop(reload_floop_ID, -1, 1);
