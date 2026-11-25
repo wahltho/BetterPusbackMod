@@ -116,6 +116,7 @@ raw_equal(const ground_ops_raw_state_t *left,
         left->replan_available == right->replan_available &&
         left->pause_requested == right->pause_requested &&
         left->pause_held == right->pause_held &&
+        left->motion_fault == right->motion_fault &&
         left->clear_signal_displayed == right->clear_signal_displayed &&
         left->clear_signal_acknowledged == right->clear_signal_acknowledged &&
         left->disconnect_approved == right->disconnect_approved &&
@@ -200,6 +201,7 @@ semantic_equal(const ground_ops_raw_state_t *left,
         left->replan_available == right->replan_available &&
         left->pause_requested == right->pause_requested &&
         left->pause_held == right->pause_held &&
+        left->motion_fault == right->motion_fault &&
         left->clear_signal_displayed == right->clear_signal_displayed &&
         left->clear_signal_acknowledged == right->clear_signal_acknowledged &&
         left->disconnect_approved == right->disconnect_approved &&
@@ -226,6 +228,8 @@ normalize_raw(const ground_ops_raw_state_t *input)
     }
     if (raw.step < PB_STEP_OFF || raw.step >= PB_STEP_COUNT)
         raw.step = PB_STEP_OFF;
+    if (raw.step != PB_STEP_PUSHING && raw.step != PB_STEP_STOPPING)
+        raw.motion_fault = NULL;
     if (raw.step != PB_STEP_CLEAR_SIGNAL) {
         raw.clear_signal_displayed = false;
         raw.clear_signal_acknowledged = false;
@@ -328,6 +332,14 @@ static void
 map_step(const ground_ops_raw_state_t *raw,
     ground_ops_snapshot_t *snapshot)
 {
+    if (raw->motion_fault != NULL) {
+        set_view(snapshot, GROUND_OPS_STAGE_PUSH, "PILOT ACTION",
+            _("Automatic movement stopped"), _(raw->motion_fault),
+            _("End operation"), true);
+        set_actions(snapshot, GROUND_OPS_ACTION_END_DISCONNECT,
+            _("End operation"), GROUND_OPS_ACTION_NONE, "");
+        return;
+    }
     switch (raw->step) {
     case PB_STEP_TUG_LOAD:
         set_view(snapshot, GROUND_OPS_STAGE_TUG, "ACTIVE",

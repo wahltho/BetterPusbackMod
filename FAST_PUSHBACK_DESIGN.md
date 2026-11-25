@@ -1,558 +1,253 @@
-# Fast Pushback: Geschwindigkeitsfaktor fuer automatische Routen
-
-Stand: 2026-11-24. Verbindlicher Entwurf und Sourceimplementierung.
-
-Nach dem Designreview wurden Sourceimplementierung, unabhaengiger Diffreview
-und Trockentests ausdruecklich freigegeben. Implementierung und Trockentests
-sind vorhanden; Ergebnisse und offene Gates stehen in
-`FAST_PUSHBACK_VALIDATION.md`. Keine Plugin-Builds, Deployments, Commits,
-Pushes oder Simulatoraktionen in diesem Implementierungsauftrag.
-
-## 1. Entscheidung und Produktvertrag
-
-Eine neue, eigenstaendige Option **Pushback speed factor** beschleunigt die
-automatische Bewegung auf einer angenommenen Pushback-/Towroute. Sie ist
-unabhaengig von **Fast Ground Handling**, Legacy-/Ground-Operations-Interface,
-Route Recall und Auto-Disconnect.
-
-Verbindliche erste Ausbaustufe:
-
-- Auswahl `1.0`, `1.5`, `2.0`; Default `1.0`.
-- Der Faktor multipliziert die bisherige Reisegeschwindigkeitsobergrenze,
-  nicht die gesamte Simulationszeit oder die fertige Controllerausgabe.
-- Vorwaerts- und Rueckwaertssegmente einer automatischen Route sind umfasst.
-- Angenommene automatische Emergency-Tow-Routen verwenden denselben Pfad.
-- Manuelles Pushen mit/ohne Yoke bleibt unveraendert. Auch Tuganfahrt,
-  Aufnahme, Aufziehen, Absenken, Entkoppeln und Abfahrt bleiben unveraendert.
-- Kurven-/Winkelgeschwindigkeitsgrenzen, Querbeschleunigung, Beschleunigung,
-  Verzoegerung, Lenkraten, Kraftgrenzen und Reibungsgrenzen bleiben erhalten.
-- `1.0` durchlaeuft den bestehenden Controllerpfad ohne neue Limits.
-- Keine neue Freigabe, kein neuer Dialog, keine automatische Bremsbestaetigung.
-- Keine Garantie fuer halbe Dauer bei `2.0`: Kurven, kurze Routen und
-  begrenzte Tugs koennen einen kleineren oder keinen Zeitgewinn erlauben.
-
-Eine gleichfoermige Zeitraffung inklusive Kurven mit vergroesserten
-Beschleunigungen waere ein anderes Feature und ist nicht dieser Entwurf.
-Der Wertebereich oberhalb `1.0` ist eine geplante Produktauswahl, noch keine
-im Simulator validierte Stabilitaetszusage.
-
-## 2. Referenz und belegte Eingriffskette
-
-Referenzcheckout: `/Users/wahltho/Documents/Projects/BPB/BetterPusbackMod-main`.
-Gepruefter `main`: `c202b4377869a1fe370ab1ac9760709f911621ce`.
-Vor Dokumentationsbeginn nur `BPB_EMBEDDED_ZIBOMOD_CONCEPT.md` untracked;
-keine getrackten Sourceaenderungen. Vor Implementierung erneut pruefen.
-
-| Owner / Funktion | Heutiger Befund | Konsequenz |
-|---|---|---|
-| `bp.c:bp_state_init()` | Basis vorwaerts 4 m/s, rueckwaerts 1.11 m/s; Beschleunigung 0.25, Verzoegerung 0.17 m/s^2; Winkel 6/4 deg/s und Querbeschleunigung 0.1 m/s^2 | Diese Basis und alle Nicht-Geschwindigkeitsparameter unveraendert lassen |
-| `bp.c:pb_step_tug_load()` | Begrenzt `bp.veh.max_*_spd` mit `max_tow_*_speed` des gewaehlten Tugs | Das so entstandene Legacyprofil bleibt erhalten |
-| `bp.c:pb_step_pushing()` | Master ruft `bp_run_push()` auf; Slave folgt dem Flugzeug | Kein neuer Slavewriter und keine zweite Berechnung im Slave |
-| `bp.c:bp_run_push()` | Manualabzweig, Bremsunterbrechung, Richtungswechsel, `drive_segs()`, Lenkung, Umrechnung auf Tuggeschwindigkeit | Nur automatische Reisegeschwindigkeitsplanung erweitern |
-| `driving.c:next_seg_speed()` | Rekursiver Lookahead fuer gleichgerichtete Segmente; Crawl bei Ende/Richtungswechsel | Dieselben Limits durch die gesamte Lookaheadkette reichen |
-| `driving.c:straight_run_speed()` | Kombiniert Reiseobergrenze mit verbleibendem Bremsweg und `max_decel` | Faktor genau hier als alternative Reiseobergrenze zufuehren |
-| `driving.c:turn_run_speed()` | Verwendet dieselbe Bremsplanung und begrenzt Winkel-/Querbeschleunigung | Grenzen unveraendert nach der neuen Reiseobergrenze anwenden |
-| `driving.c:drive_on_line()` | Pfadkorrektur, verlangsamte Ueberkorrektur und `ang_vel_speed_limit()` | Originales `vehicle_t` behalten, nicht global skalieren |
-| `bp.c:push_at_speed()` | Reibungslimit, Krafterzeugung und Physikwrites; verarbeitet Tuggeschwindigkeit | Funktion unveraendert; kein zentraler Faktor an dieser Stelle |
-| `bp.c:pb_step_stopping()` und Nachfolgeschritte | Zielausrichtung, Stillstand, bestehende Bremsuebergabe | Kein Faktor, keine neuen Abfragen/Writes oder geaenderten Schwellen |
-| `tug.c:tug_drive()` | Eigene Fahrzeugparameter und `drive_segs()` fuer freie Tugbewegung | Bestehenden API-Aufruf ohne neue Limits behalten |
-| `bp_cam.c:draw_prediction()` | Zeichnet geometrische Routensegmente | Keine neue zeitabhaengige Route, keine Cacheformatmigration |
-
-Quellanker gelten fuer den genannten Snapshot; Funktionsnamen haben Vorrang
-vor spaeter verschobenen Zeilennummern. Dies ist statische Sourceanalyse,
-kein ausgefuehrter Controller-/Physiktest.
-
-## 3. Geschwindigkeitsprofil und Einheiten
-
-Fuer jede Fahrtrichtung getrennt:
-
-```text
-L = bestehende bp.veh.max_*_spd nach Tugauswahl             [m/s]
-T = passende tug.info.max_tow_*_speed                      [m/s]
-F = validierter, fuer diese Operation fixierter Faktor
-C = min(F * L, T)                                         [m/s]
-```
-
-`C` ist nur die neue Reiseobergrenze. Das Originalprofil `bp.veh` wird nicht
-veraendert. `straight_run_speed()` setzt `C` anstelle von `cruise_spd` ein,
-behaelt aber seine heutige quadratische Bremswegberechnung. Die ausgegebene
-Geschwindigkeit kann deshalb deutlich unter `C` liegen. `turn_run_speed()`
-und `ang_vel_speed_limit()` begrenzen sie danach wie bisher.
-
-Beispiel rueckwaerts, Tuggrenze mindestens 2.22 m/s:
-
-| Faktor | Reiseobergrenze | Naeherungswert |
-|---|---|---|
-| 1.0 | 1.11 m/s | 4.0 km/h |
-| 1.5 | 1.665 m/s | 6.0 km/h |
-| 2.0 | 2.22 m/s | 8.0 km/h |
-
-Ein enger Radius von 10 m ist bereits durch `sqrt(0.1 * 10)` auf
-hoechstens 1 m/s begrenzt; der Faktor hebt das nicht auf. Bei 0.17 m/s^2
-Verzoegerung vervierfacht Verdoppelung der Geschwindigkeit den idealisierten
-Bremsweg bis Null: etwa 3.62 auf 14.50 m. Der vorhandene Lookahead muss
-deshalb die erhoehte Obergrenze kennen; hinterher `speed *= F` ist verboten.
-Die Zahlen sind algebraische Beispiele, keine gemessenen Simulatorwerte.
-
-Die aktuellen Tugdefaults sind 6/3 m/s vorwaerts/rueckwaerts. Fehlende
-`max_tow_*`-Werte fallen im Parser auf diese freien Fahrgeschwindigkeiten
-zurueck. AP88 setzt explizit 1.7778 m/s fuer beide belasteten Richtungen.
-Mit diesem Tug endet der Rueckwaertsvorteil deshalb bei etwa 1.60x, und
-vorwaerts entsteht gegenueber dessen bisherigem Cap kein Zusatznutzen.
-Tugkonfigurationen werden fuer das Feature nicht angehoben.
-
-### 3.1 Umrechnung Flugzeug -> Tug
-
-Heute wird die longitudinale Controllerausgabe in `bp_run_push()` umgerechnet:
-
-```text
-q = max(cos(nw_defl), 0.1)
-v_tug = v_longitudinal / q
-```
-
-Nur bei aktivem Faktor groesser 1 wird anschliessend der Betrag von `v_tug`
-mit dem richtungsabhaengigen belasteten Tugcap begrenzt. Sonst koennte die
-Umrechnung den Cap trotz des Profils wieder ueberschreiten. Vorzeichen
-bleibt erhalten, Null bleibt Null. **Dies ist kein nachtraegliches
-Multiplizieren**, sondern ein zusaetzlicher Cap vor `push_at_speed()`.
-Die Reibungscaps in dieser Funktion wirken weiterhin danach.
-
-Das ist eine Begrenzung der Sollgeschwindigkeit, keine harte Garantie gegen
-kurzzeitige Istwertueberschwinger des vorhandenen Kraftreglers. Dessen
-Stabilitaet und Zielgenauigkeit muessen nach Test-/Simulator-Go belegt werden.
-
-Bei `F == 1.0` bleibt auch diese Umrechnung ohne neuen Clamp. Ein eventuell
-bereits im Legacybetrieb vorhandener Grenzfall wird nicht nebenbei repariert.
-Kurven-/Winkelgrenzen beziehen sich weiterhin auf ihre bisherigen
-Controllergroessen; keine unbewiesene neue Gleichsetzung mit Tuggeschwindigkeit.
-
-## 4. Konkreter Sourceentwurf
-
-### 4.1 Reiner Faktor-/Limithelper
-
-Neue kleine Datei `src/pushback_speed.h` mit ausschliesslich Standard-C-
-Typen/Mathematik, C/C++-kompatibel, ohne libacfutils oder Hostzugriffe.
-
-Festgelegte Aufgaben:
-
-- Normalisieren: nur exakt `1.0`, `1.5`, `2.0` akzeptieren; alles andere,
-  einschliesslich NaN/Inf, auf `1.0` zuruecksetzen.
-- Die zwei Reiseobergrenzen gemaess Abschnitt 3 bilden.
-- Den vorzeichenrichtigen Tugcap nach Umrechnung anwenden.
-- Ungueltige/nichtpositive Basis-/Tuglimits duerfen niemals einen erhoehten
-  oder unendlichen Sollwert erzeugen. In diesem Fall keinen Speed-Override
-  bereitstellen, den Legacypfad verwenden und einmal pro Operation warnen.
-
-Keine eigene Zeitbasis, keine Registry, kein RNG, keine Speicherallokation,
-kein globaler Zustand. Dieser Helper ist keine neue libacfutils-Abhaengigkeit.
-
-### 4.2 Additive Driving-API statt veraendertem Fahrzeug
-
-`src/driving.h` erhaelt `drive_speed_limits_t` mit zwei m/s-Feldern fuer
-Vorwaerts-/Rueckwaertsreiseobergrenze und eine additive Funktion
-`drive_segs_with_speed_limits(...)`. Sie besitzt dieselben bisherigen
-Parameter und zusaetzlich einen `const drive_speed_limits_t *`.
-
-`drive_segs(...)` behaelt Signatur und Semantik. Beide delegieren an einen
-gemeinsamen internen Rumpf. Der alte Aufruf reicht `NULL` fuer Limits durch.
-`NULL` verwendet unveraendert `veh->max_fwd_spd`/`veh->max_rev_spd`.
-
-Der optionale Pointer wird unveraendert durch `next_seg_speed()`,
-`straight_run_speed()` und `turn_run_speed()` gereicht. Ausschliesslich die
-Auswahl von `cruise_spd` bekommt einen neuen Zweig. Segmentloeschung,
-Richtungswechsel, Crawl, Ueberkorrektur und Lenkausgabe bleiben unveraendert.
-
-Insbesondere kein skaliertes `vehicle_t`: Sonst wuerde auch die bisherige
-Verlangsamung bei Ueberkorrektur in `drive_on_line()` vergroessert, obwohl
-sie nicht zur gewuenschten Reisebeschleunigung gehoert.
-
-### 4.3 Operationseigener Faktor und Live-Aufruf
-
-`bp_state_t` in `bp.h` erhaelt einen skalaren
-`automatic_push_speed_factor`. Nach `bp_state_init()` explizit `1.0`, nicht
-der Nullwert aus `memset`. Keine Ressource und kein eigener Teardown.
-
-Im erfolgreichen Startpfad von `bp_start()`, nach `bp_can_start()` und vor
-Scheduling des Flightloops, wird einmal der validierte Settingswert kopiert.
-Bereits laufender Start, fehlgeschlagener Start oder Plannerbewegungen
-schreiben den Operationsfaktor nicht um. Ein Reconnect behaelt ihn. Nach
-Complete/Abort liefert der bestehende Reset wieder `1.0`; die naechste
-Operation uebernimmt den dann gespeicherten Wert neu.
-
-`bp_run_push()` behaelt zuerst seinen Manualabzweig und alle bestehenden
-Brems-, Pause- und Richtungswechselbedingungen. Nur am automatischen
-`drive_segs()`-Aufruf:
-
-1. Bei Faktor 1 oder nicht bereitstellbarem Profil den bisherigen Aufruf nutzen.
-2. Sonst Limits auf dem Stack aus aktuellem Legacyprofil und gewaehltem Tug
-   bilden; `drive_segs_with_speed_limits()` verwenden.
-3. Bestehende Lenkung und longitudinale Umrechnung ausfuehren.
-4. Nur im erhoehten Pfad den Tugcap aus Abschnitt 3.1 anwenden.
-5. Bei `hold_requested` unveraendert Null mit `bp.veh.max_decel` anfordern;
-   sonst denselben bisherigen `push_at_speed()`-Aufruf mit neuer Sollgeschwindigkeit.
-
-Profilbildung erfolgt nicht kumulativ; niemals bereits skalierte Werte
-erneut multiplizieren. Keine Configreads im per-Frame-Drivingcode. Der Slave
-ruft diesen Masterpfad nicht auf; keine Synchronisation eines neuen
-schreibbaren Datarefs und keine eigenen Physikwrites im Slave.
-
-### 4.4 Bestehende Telemetriemetadaten korrekt publizieren
-
-`telemetry_start()` in `bp.c` liest derzeit `effective_max_fwd_speed_mps`
-und `effective_max_rev_speed_mps` aus dem unveraendert bleibenden Legacyprofil.
-Das waere nach dem Feature fuer erhoehte automatische Fahrt falsch.
-
-Die bestehende Producerzuweisung muss denselben validierten Profilhelper
-wie der Drivingaufruf verwenden: automatische Masteroperation mit gueltigem
-Override meldet `C`; Faktor 1, Fallback und Manual melden die bisherigen
-Legacywerte. Die Felder bedeuten longitudinale Reiseobergrenzen vor
-dynamischen Limits, nicht Tuggeschwindigkeit oder garantierte Istwertcaps.
-Keine Schemanummer/-felder aendern. Die Slavewerte bleiben mangels
-Faktorsynchronisation lokale, nicht autoritative Werte; das im Diagnosevertrag
-explizit festhalten und nicht als Masterprofil auswerten.
-
-Der Snapshot liegt vor `telemetry_start()` vor; Tugauswahl und bestehende
-Legacycaps sind an dessen Aufrufstelle bereits bekannt. Die neue Metadaten-
-Berechnung ist read-only, darf kein Profil in `bp.veh` zurueckschreiben und
-keine Telemetrie in normalen Distributionen einschalten.
-
-## 5. Settings, Persistenz und Texte
-
-Globale Option, analog zur bestehenden unabhaengigen Fast-Option:
-
-| Vertrag | Festlegung |
-|---|---|
-| Configkey | `pushback_speed_factor`, numerisch |
-| Getter in `cfg.h/.cpp` | `double bp_pushback_speed_factor(void)` |
-| Fehlender/unlesbarer/ungueltiger Key | Effektiv `1.0`; keine automatische Dateiumschreibung |
-| UI-Label | `Pushback speed factor` |
-| Auswahl | `Normal (1x)`, `1.5x`, `2x` |
-| Widget-ID | `##pushback_speed_factor` |
-| Speicherzeitpunkt | Gemeinsam mit staged Fast-/Recall-Werten bei Save preferences |
-| Aktivierung | Neue Operation; Save muss bis zum vollstaendigen Operationsende gesperrt sein, siehe Voraussetzung 5.1 |
-| Per-Aircraft-Migration | Keine; `per_aircraft_is_global` aendert diesen globalen Key nicht |
-
-SettingsWindow liest den validierten Getter in seinen Auswahlzustand ein.
-Schliessen ohne Save aendert diese Option nicht. Save schreibt ausschliesslich
-einen der drei gueltigen Faktoren und verwendet den gemaess 5.1 abgesicherten Reload.
-Keine Aenderung der Classic-Migration und kein heimliches Einschalten von Fast.
-
-### 5.1 Vorgelagertes Sicherheitspaket: Save/Reload wirklich nur idle
-
-Der unabhaengige Review hat die Annahme eines bereits sicheren Idle-Reloads
-widerlegt. `stop_pb_handler()` aktiviert das Preferencesmenue vor Abschluss
-der Operation. Ein neues SettingsWindow initialisiert `save_disabled` mit
-false. `bp_conf_set_save_enabled(flag)` weist den Enabled-Parameter direkt
-`save_disabled` zu, also invertiert zur Benennung und den heutigen Aufrufern.
-`bp_do_reload()` deaktiviert den Core bei gesetztem Request ohne erneuten
-Idlecheck. Ein Factorsnapshot verhindert diesen Core-Reset nicht.
-
-Das ist ein bestehender Lifecyclefehler, kein Speedalgorithmusfehler.
-**Vor der Featureintegration ist ein eigenes, eng begrenztes Sourcepaket
-mit ausdruecklichem Source-Go erforderlich:**
-
-- In `cfg.cpp` die vorhandene Enabled-API korrekt auf Disabled abbilden:
-  `save_disabled = !flag`. Die heutigen Aufrufer geben bereits `!bp_started`
-  weiter und brauchen deshalb keine Aenderung am Controller.
-- Den neuen Fensterzustand aus dem aktuellen Busy-Zustand initialisieren.
-  Beim Rendern und nochmals unmittelbar im Save-Zweig gilt zusaetzlich
-  `!bp_started && !planner_open`. Nicht allein auf den gecachten
-  `save_disabled`-Wert oder die Menuefreigabe vertrauen.
-- Bei verweigertem Save keine staged Configwrites, Dateipersistenz oder
-  Reloadanforderung ausfuehren. Bestehende sonstige Live-Settings werden
-  durch dieses Paket nicht zu einem neuen Transaktionssystem umgebaut.
-- In `xplane.c:bp_sched_reload()` Operation/Planner vor Requestannahme
-  pruefen. Die bestehende void-API kann erhalten bleiben.
-- In `bp_do_reload()` unmittelbar vor Coreinvalidierung/-disable erneut
-  `!bp_started && !planner_open && !get_pref_widget_status()` pruefen.
-  Preferences-Save schliesst das eigene Fenster und setzt dessen Aktivflag
-  vor dem naechsten Flightloop zurueck. Nicht den eigenen sichtbaren
-  Prefsstatus als pauschale Sperre fuer das Anfordern beim Save verwenden.
-- Wird ein angenommener Request bis zur Ausfuehrung unzulaessig, ihn
-  verwerfen und einmal melden; kein automatischer spaeterer Reload nach
-  Abschluss einer inzwischen gestarteten Operation. Status, Tug und Core
-  bleiben dabei unveraendert; der Nutzer kann idle erneut speichern/laden.
-
-Getrennte Allowlist dieses Voraussetzungspakets: `src/cfg.cpp`,
-`src/xplane.c`, neuer `tests/reload_safety_test.c`, neuer
-`tests/run_reload_safety_tests.py` und Runnerregistrierung in
-`tests/run_all_tests.sh`. Keine Aenderung von `bp.c` oder Bremsfunktionen.
-Das Speedfeature selbst erweitert seine Allowlist dadurch nicht heimlich.
-
-Pflichtfaelle: Fenster idle/waehrend STOPPING neu oeffnen; laufende Operation
-und Late-Plan; Save nach Stop, aber vor Complete; Save nach Complete;
-gueltiger Request mit Operation/Planner/neuem Prefsfenster vor dem naechsten
-Callback; verworfener Request wird nicht spaeter ausgefuehrt. Alle verweigerten
-Pfade muessen ohne Core-Reset, Invalidierung oder zusaetzliche Brakewrites
-bleiben. Der idle erlaubte Save-/Reloadpfad funktioniert weiterhin.
-
-Diese Lifecyclekorrektur aendert bewusst eine fehlerhafte UI-/Reloadsemantik
-auch bei Faktor 1. Die geforderte Faktor-1-Paritaet des Fahrcontrollers bleibt
-davon getrennt. Sie ist kein Anlass, diese Sicherheitskorrektur als versteckte
-Brems- oder Geschwindigkeitsaenderung auszugeben.
-
-### 5.2 Neue Texte
-
-Tooltip, verbindliche Aussage:
-
-> Raises the cruising-speed limit of automatic pushback and towing. Tug,
-> turn and stopping limits still apply. Does not change manual towing or
-> ground handling. 2x does not guarantee half the total time.
-
-Label, neue Auswahltexte und Tooltip in `data/po/strings.pot` aufnehmen.
-Bestehende PO-Uebersetzungen nicht erfinden oder als fertig markieren;
-fehlende Uebersetzungen verwenden den englischen Fallback.
-Den bisherigen Fast-Ground-Handling-Tooltip eindeutig abgrenzen: Diese
-Option aendert selbst keine Fahrgeschwindigkeit, die neue Option tut es.
-UI-Zeile und Savebutton muessen auf dem kleinsten unterstuetzten Fenster
-erreichbar bleiben; noetigenfalls vorhandenes Layout minimal erweitern.
-
-## 6. Unveraenderliche Vertraege und Featuregrenzen
-
-Keine Aenderung an:
-
-- `pbrake_is_set()`, `brakes_set()`, Bremsdatarefs oder SDK-Wrappern.
-- `fast_brake_handoff.h`, Resetstellen, Pedalschwelle, VERIFIED/RESTORE,
-  `required`, `fast_brakes_relinquished` und allen Cleanupguards.
-- STOPPING/STOPPED/LOWERING/UNGRABBING und Parkbremsbestaetigungen.
-- `push_at_speed()`, Krafterzeugung, Beschleunigung/Verzoegerung und Reibung.
-- `turn_nosewheel()`, Fahrwerks-/Kontaktwrites und Lenkraten.
-- Simzeit, `bp.d_t`, Flightloopphase/-frequenz und Pause/Replaybehandlung.
-- `artificial_delay()`, `handling_fraction()` und Handlingzeiten.
-- Richtungswechselwartezeit, STOP-/Pause-/Abortentscheidungen und Schwellen.
-- Segmentgeometrie/-ende, Route Recall/Save, Slot-/Legacycacheformat.
-- Kompassposition/-orientierung und geometrischer Plannerdarstellung.
-- Bugradstatus ABI 1 mit 17 Elementen, Producergrenzen und Rateberechnung.
-- Tugkonfigurationen, Assets, Stimmen, Audiozeitbasis und Zufallssequenz.
-
-Der Controller darf bei Faktor groesser 1 andere Sollgeschwindigkeiten und
-infolgedessen andere Bewegungs-/Kraftwerte erzeugen. Das ist der beabsichtigte
-Featureeffekt, keine Behauptung unveraenderter Gesamtphysik. Die Algorithmen
-und alle Bremsuebergabe-Writer bleiben unveraendert. Durch frueheren
-Stillstand duerfen Ablaufereignisse frueher eintreten, niemals durch eine
-ersetzte oder erzwungene Parkbremsfreigabe.
-
-Pause und Pilotbremsung koennen wegen hoeherer Anfangsgeschwindigkeit mehr
-Weg benoetigen. Das Feature darf deshalb nicht als garantierter Sofortstopp
-beworben werden. Akzeptanz prueft realen Bremsweg mit den bisherigen Grenzen.
-
-Bei einer spaeteren Uebernahme in den Zibomod-Port gelten dieselben Vertraege.
-Der Port bleibt gemaess `BPB_EMBEDDED_ZIBOMOD_CONCEPT.md` vollstaendig ohne
-libacfutils-Abhaengigkeit. Dieses Feature fuehrt weder dort noch im Helper
-eine solche Abhaengigkeit neu ein und implementiert keine Portmigration.
-
-### 6.1 Bestehende Rueckwaerts-Lenkdaempfung als ausdrueckliches Gate
-
-`turn_nosewheel()` verwendet nach `ang_vel_speed_limit()` den Vergleich
-`speed < bp_ls.tug->pos.spd`. Bei Rueckwaertsfahrt von -2 auf begrenzte
--1 m/s ist die Bedingung falsch; die zusaetzliche Lenkdaempfung ist damit
-nicht vorzeichensymmetrisch. Die eigenstaendige Lenkratenbegrenzung bleibt
-vorhanden. Das ist ein belegter Baselinebefund, keine neue Folge des Faktors.
-
-Nicht im Feature reparieren und dadurch Defaultparitaet aufgeben.
-Stattdessen erhoehte Rueckwaertsfahrt mit grossen Lenkkorrekturen und
-Auslenkungen nach beiden Seiten ausdruecklich trocken und im Simulator
-pruefen. Unveraenderter Lenkcode allein ist kein Stabilitaetsbeweis bei
-hoeherem Tempo. Scheitert dieses Gate, den betroffenen Faktor nicht
-freigeben; eine Lenkungskorrektur benoetigt einen eigenen Entwurf/Scope.
-
-## 7. Planner und bestehender Baselinebefund
-
-Die aktive `draw_prediction()` zeichnet `draw_segment()` fuer angenommene
-und vorhergesagte geometrische Segmente. `compute_segs()`, Segmenthash und
-Routecache bleiben unveraendert; diese Daten beschreiben keine Fahrdauer.
-Faktorwechsel erfordern hier keinen neuen geometrischen Cachekey.
-
-**Korrektur bei der Buildvorbereitung:** Der getrackte `bp_cam.c` enthaelt
-zusaetzlich einen nicht vom aktiven Zeichnen aufgerufenen Previewblock
-`planner_build_controller_path()` / `draw_controller_path()`. Darin werden
-unter anderem `planner_prediction_state_t`, `PREDICTION_DT`,
-`planner_path_count` und `planner_prediction_signature()` benutzt; ihre
-Definitionen wurden im aktuellen Sourcebestand nicht gefunden. Der Block
-behauptet ausserdem im Kommentar einen Bezug zu `automatic_steer_target()`,
-das im aktuellen Livecontroller nicht vorhanden ist.
-
-Der gesamte Block steht jedoch bereits in der eingefrorenen Referenz unter
-`#if 0` (`bp_cam.c:684` bis `:1115`). Die fruehere Einstufung als
-kompilationsrelevanter Closurebefund war falsch: Der Praeprozessor entfernt
-diesen Block. Source und lokale Workspacekopie dieses Files
-haben denselben SHA-256:
-`6eb0f0a5bb9ea0f704cf816be90fab8b175c4ba7a6df6f71b504f525527fd963`.
-
-Diesen Block fuer Fast Pushback weder aktivieren noch ausbauen, entfernen
-oder durch ein neues Lenkmodell ersetzen. Es ist keine Plannerkorrektur
-fuer den Produktbuild erforderlich. Ein erfolgreicher Neubuild wird erst
-nach ausgefuehrtem Build belegt.
-Falls spaeter ein echter dynamischer Preview aktiviert wird, braucht dessen
-Signatur das effektive Speedprofil und die Tuggrenzen. Das ist nicht die
-heutige aktive Anzeige und kein Grund fuer vorsorgliche Plannerneuschreibung.
-
-## 8. Implementierungs-Allowlist
-
-Nach gesondertem Source-Go geplanter Diff:
-
-| Datei | Erlaubte Aenderung |
-|---|---|
-| `src/pushback_speed.h` neu | Reine Validierungs-/Limithelper, Standard-C |
-| `src/driving.h` | Optionales Speedlimitpaar und additive API |
-| `src/driving.c` | Gemeinsamer API-Rumpf, Pointer durch Lookahead, alternative Reiseobergrenze |
-| `src/bp.h` | Ein skalarer Operationsfaktor |
-| `src/bp.c` | Init/Snapshot, Auswahl am automatischen Driving-Aufruf, Tugcap vor Kraftregler, bestehende `effective_max_*`-Metadaten mit demselben Profilhelper |
-| `src/cfg.h`, `src/cfg.cpp` | Getter, staged Combo, validiertes Speichern und Tooltipabgrenzung |
-| `data/po/strings.pot` | Ausschliesslich neue/angepasste UI-Texte |
-| `README.md`, `USER_GUIDE.md` | Optionsunabhaengigkeit, Limits und Zeitpunkt der Uebernahme |
-| `tests/pushback_speed_test.c` neu | Echte Helper, keine nachprogrammierte Erwartungszustandsmaschine |
-| `tests/run_pushback_speed_tests.py` neu | Echte Driving-/Config-/Controllerstellen mit SDK-Stubs/Referenzstand pruefen |
-| `tests/run_all_tests.sh` | Neuen Runner aufnehmen |
-
-Keine Aenderung von `bp_cam.c`, `vehicle_physics.c`, `tug.c`, Tugassets,
-Buildchain, libacfutils, Zibomod-Source oder bestehenden Bremsreferenzen.
-Falls eine Source-Allowlist nicht reicht, vorher konkret begruenden statt
-waehrend der Implementierung unbemerkt zu erweitern. Die bestehenden
-ungetrackten Dokumente und fremde Aenderungen bleiben erhalten.
-
-## 9. Geplanter Test- und Reviewvertrag
-
-Dieser Abschnitt ist der urspruengliche Testvertrag. Der spaeter autorisierte
-Trockentestlauf ist in `FAST_PUSHBACK_VALIDATION.md` belegt. Simulatorfaelle
-sind weiterhin offen. Fuer Referenzvergleiche den oben fixierten Sourcezustand
-verwenden, nicht waehrenddessen einen beweglichen Upstreamstand.
-
-### 9.1 Reine Helper und Driving
-
-- Alle drei Faktoren, fehlende/unlesbare Config, Null, negative Werte,
-  Zwischenwerte, NaN/Inf: gueltige Auswahl oder exakt Default 1.
-- Getrennte Vorwaerts-/Rueckwaertscaps, AP88 und synthetischer niedriger
-  Tugcap; keine Ueberschreitung durch wiederholte Aufrufe.
-- Faktor 1/NULL-Limits gegen fixierten Original-Drivingcode: dieselben
-  Sollgeschwindigkeiten, Lenkwerte, decel-Flags, Segmentmutationen und
-  `last_mis_hdg`; einschliesslich finalem Crawl und Richtungswechsel.
-- Langgerade erreicht bei genug Strecke das zulaessige erhoehte Cap;
-  monotone Faktoren erzeugen keine niedrigere reine Reiseobergrenze.
-- Kurzgerade, Gerade vor Kurve, Kurve vor Gerade, S-Kurve, enge/weiche
-  Links-/Rechtsboegen, Folgekurven und wechselnde Fahrtrichtung.
-- Bremsbeginn vor dem neuen Cap ausreichend frueh; Ende/Crawl und
-  Richtungswechsel nicht multipliziert. Keine Annahme einer exakten
-  Halbierung der Laufzeit fuer diese Faelle.
-- Ueberkorrektur weiterhin mit Legacy-`veh.max_rev_spd` begrenzt;
-  Winkel-/Querbeschleunigungsgrenzen fuer die heutigen Bezugsgroessen erhalten.
-- Umrechnung bei 0, positiven/negativen grossen Tugwinkeln: Vorzeichen,
-  Null und finales Tugcap korrekt; Faktor 1 verwendet Originalpfad.
-- Erhoehte Rueckwaertsfahrt mit starken Lenkkorrekturen beidseits gegen
-  den realen `turn_nosewheel()`-Pfad pruefen; Asymmetrie aus 6.1 nicht
-  durch ein idealisiertes Testmodell oder geaenderte Erwartungen verdecken.
-
-Dazu echte `drive_segs()`-/Lookaheadfunktionen kompilieren bzw. mit minimalen
-Stubs extrahieren. Nicht nur eine vereinfachte Geschwindigkeitsformel testen.
-Integration mit einfachem Bicycle-Modell ist Dry-Evidenz, kein Nachweis fuer
-die echte X-Plane-Kraftregelung.
-
-### 9.2 Controller, Features und Lifecycle
-
-- Sourcevergleich aller geschuetzten Bremsfunktionen und bestehenden
-  Bremscontrollerfixture, ohne neue Erwartungen an geaenderte Bremslogik.
-- Automatik mit Faktor 1/1.5/2, Fast Handling aus/an und beiden Interfaces.
-- Parkbremse/Pedale waehrend Bewegung, Pause/Resume, Stop, Abort, Lichtwarnung,
-  Richtungswechselwartezeit und normaler Abschluss bleiben erreichbar.
-- Realistic-Parkbremse mit gehaltenen Pedalen beim Setzen, spaeterem Release
-  und erneutem Antippen nach VERIFIED: bestehender Fast-Readbackvertrag.
-- Reconnect behaelt Operationsfaktor; Complete/Abort/Reload und naechster
-  Start erzeugen weder stale Profil noch doppelte Skalierung.
-- Slave und Manual verwenden unveraenderten Pfad; automatische Emergency
-  Tow nur waehrend ihrer angenommenen Route beschleunigt.
-- Save/Reload/Neustart und Fenster schliessen ohne Save; kein Einfluss von
-  Classicmigration, Fastoption, Recall oder Per-Aircraft-Globaloption.
-- Voraussetzung 5.1 vollstaendig pruefen, insbesondere Save nach Stop vor
-  Complete und einen erst nach Scheduling busy gewordenen Reloadcallback.
-- `effective_max_*`-Metadaten fuer 1/1.5/2, kleinen Tugcap, Fallback und
-  Manual entsprechen dem tatsaechlich ausgewaehlten Profil; Slavewerte
-  werden nicht als synchronisiertes Masterprofil interpretiert.
-- Beide Tugbauarten, unveraenderte Bugradproducer und geometrische Route;
-  bekannte Rate-/Statusvalidierung nicht an neue Erwartungen anpassen.
-
-Nach fokussierten Tests die gesamte bestehende `tests/run_all_tests.sh`
-ausfuehren. Deren bestehende Coverage ist nicht automatisch ein Test der
-neuen Driving-Erweiterung. Distributionstelemetrie bleibt standardmaessig aus.
-Ein Startlog darf Faktor und berechnete Reiseobergrenzen einmal nennen;
-keine neue per-Frame-Aufzeichnung und keine Telemetrieschemaaenderung noetig.
-Die bestehenden Metadatenproducer werden gemaess 4.4 trotzdem korrigiert.
-
-### 9.3 Simulatorabnahme nach separatem Build-/Deploy-Go
-
-Referenzroute und Flugzeug unveraendert vergleichen: lange Gerade,
-90-Grad-Kurve links/rechts, S-Kurve, kurze Zielgerade und Richtungswechsel.
-Faktoren 1/1.5/2, schwere/leichte Aircraft, GRAB/WINCH, normale/schwache
-Reibung und niedrige Framerate pruefen. Konkrete Bewertungsgrenzen:
-
-- Rueckwaertige grosse Lenkkorrekturen und beidseitige Ausgangsauslenkung
-  sind wegen 6.1 Pflichtfaelle, nicht bloss ein symmetrischer Bicycle-Test.
-- Faktor 1 keine Regression gegen denselben Baselinestand.
-- Bei Faktoren groesser 1 kein neuer Segment-/Zielueberschuss ueber 0.5 m
-  oder zusaetzlicher Endheadingfehler ueber 1 Grad gegen die Vergleichsfahrt.
-- Kein zusaetzlicher maximaler Cross-Track-Fehler ueber 0.5 m gegen die
-  Vergleichsfahrt und kein Verlassen der vorhandenen Wingspan-Flaeche.
-- Diese Differenzgrenzen sind geplante Akzeptanzgrenzen, keine nachgewiesene
-  Baselinegenauigkeit. Eine bereits unsichere Vergleichsfahrt ist kein Pass.
-- Pause/Stop bis Stillstand ohne neu auftretende Oszillation, ruckartigen
-  Kontaktverlust oder Fortsetzung bei gesetzter Bremse; groesserer Bremsweg
-  entsprechend Ausgangsgeschwindigkeit dokumentiert.
-- Parkbremse haelt beim Abschluss auch mit Fast Handling und realistic Brake;
-  kein zweites Setzen durch einen neu eingefuehrten Nullwrite.
-- Zeitgewinn auf der langen, nicht vom Tug begrenzten Gerade nachweisen;
-  kein Mindestzeitgewinn bei physikalisch begrenzten Kurven erzwingen.
-
-Scheitert ein Faktor, nicht Kurven-/Bremsgrenzen aufweichen oder Tests
-anpassen. Zuerst Eingriff pruefen; falls der bestehende Regler im erlaubten
-Bereich nicht stabil ist, Produkt-Go fuer diesen Faktor zurueckhalten und
-den Befund vor einer Erweiterung von Kraeften/Lenkung vorlegen.
-
-## 10. Statischer Gegencheck und Freigabegates
-
-Im Entwurf gepruefte Einwaende:
-
-| Einwand | Entscheidung |
-|---|---|
-| Einfach fertige Geschwindigkeit multiplizieren? | Nein, verletzt den vorhandenen Bremsweg-/Kurvenlookahead |
-| Ganzes Fahrzeugprofil oder `d_t` skalieren? | Nein, veraendert Korrekturgates, Zeit-/Physikvertraege und weitere Phasen |
-| Beschleunigung/Verzoegerung ebenfalls vergroessern? | Nein, nicht fuer diese erste Ausbaustufe |
-| Beladene Tuggrenze nach Kosinusumrechnung umgangen? | Neuer Cap nur im erhoehten automatischen Pfad |
-| Freie Tugfahrt durch gemeinsame Drivingfunktion schneller? | Alte API bleibt NULL-Limits; neuer Aufruf nur in Auto-Push |
-| Bremsuebergabe als Nebenprodukt anfassen? | Explizit ausgeschlossen und source-/tracebasiert zu pruefen |
-| Preview aktivieren, um eine Faktorzeit zu zeigen? | Nein, bestehende Geometrie belassen; separaten Baselinebefund nicht verstecken |
-| libacfutils im kuenftigen Port doch wieder erforderlich? | Nein, neue Policy ist Standard-C; keine Portmigration in diesem Scope |
-| Save nach Stop kann den Core waehrend Entkopplung reloaden? | Bestehender Fehler; eigenes vorgelagertes Sicherheitspaket 5.1 |
-| `effective_max_*` wuerde weiterhin Legacytempo melden? | Producer korrigieren, Schema beibehalten, siehe 4.4 |
-| Rueckwaertige Tug-Lenkdaempfung wirklich symmetrisch? | Nein; Baselinebefund 6.1 als ausdrueckliches Freigabegate, keine versteckte Lenkungsreparatur |
-
-Der statische Gegencheck wurde vom ausarbeitenden Agenten vorgenommen.
-Der anschliessend ausdruecklich beauftragte unabhaengige Reviewer hat den
-Erstentwurf gegen denselben Sourcezustand read-only geprueft. Reviewbasis:
-SHA-256 `08077eaf84b485ad1d0073f131270f49098a298b7fa4516a6c0381917ea03cc9`.
-Seine Findings: P1 Save-/Reloadsperre, P2 Metadatenproducer, P2 bestehende
-Rueckwaerts-Lenkasymmetrie. Die Entwurfskorrekturen stehen in 5.1, 4.4 und
-6.1. Die unabhaengige Nachpruefung vom 2026-11-24 bestaetigt alle drei
-Findings auf Konzeptebene als geschlossen, ohne neue materielle Widersprueche.
-Nachpruefungsbasis vor dieser reinen Statusaktualisierung:
-SHA-256 `f4206a79fbf709e71ed47c1c6061d34023e13ebfc3c20d8bd9466690a14c14a5`.
-Reviewerurteil: bereit fuer die gesonderte Source-Go-Entscheidung zum
-Voraussetzungspaket 5.1 und anschliessend zur Featureimplementierung.
-Zum Zeitpunkt des Designreviews gab es noch keine Sourceimplementierung; die
-bestehende Lenkasymmetrie ist nicht behoben, sondern als Abnahmegate erfasst.
-Vor Produktfreigabe ist zusaetzlich Review des konkreten Gesamtdiffs samt
-Testergebnissen erforderlich.
-
-Nachfolgende Gates (Status nach dem spaeteren Implementierungs-Go):
-
-1. Abgeschlossenes Designreview; gesondertes Source-Go fuer das
-   Voraussetzungspaket 5.1 und danach die Feature-Allowlist: erfolgt;
-   Implementierung auf `main`, Baseline `c202b4377869a1fe370ab1ac9760709f911621ce`.
-2. Test-Go und fokussierte, Lifecycle- und bestehende Regressionen: erfolgt;
-   Toolchainhinweise und Grenzen siehe `FAST_PUSHBACK_VALIDATION.md`.
-3. Unabhaengiger Diffreview: Ergebnis siehe `FAST_PUSHBACK_VALIDATION.md`.
-4. Baseline-/Buildverdacht aus Abschnitt 7: geklaert, deaktivierter
-   Referenzblock; keine Planner- oder Lenkungsaenderung erforderlich.
-5. Build-/Deploy-Go; danach erst Simulatorabnahme und separates Commit-/Push-Go.
-
-Der Featureentwurf legt API, Scope und Semantik fuer eine Implementierung
-fest. Keine Aussage dieses Dokuments erklaert die noch offenen Test-,
-Review-, Baseline-Build- oder Simulatorgates bereits fuer bestanden.
+# Fast Pushback: lokale Zeitraffung, erste Stufe bis 2x
+
+Stand 2026-11-25, Sourcebasis main@72a329537104c93b432859cc1600136f653aa187.
+Technischer Entwurf, nicht der Stand des installierten Plugins. Das bisherige
+Feature begrenzt lediglich das Reisetempo am Tug. FAST_PUSHBACK_VALIDATION.md
+und der Buildbericht in ../deploy/ belegen nur diesen alten Stand. Keine
+Simulatorabnahme oder Implementierung der folgenden Entscheidungen.
+
+## 1. Produkt und Persistenz
+
+Auf derselben automatischen Route sollen Anfahren, Gerade, Kurven, Abbremsen
+und bewegte Endausrichtung bei 2x in etwa der halben Bewegungszeit ablaufen.
+Kein Zeitraffer fuer X-Plane, Handling, Ansagen, Wartezeiten oder Piloten.
+AP88 und andere Tugs behalten ihr eigenes Ausgangsprofil, aber nicht dessen
+unskaliertes Tempo als Obergrenze fuer die beschleunigte Bewegung.
+
+Ein globales Auswahlfeld "Pushback speed" (nur BPB-Bewegung, kein Simspeed-Write): Normal (1x), 1.5x,
+2x. Default 1x. 3x ist lediglich eine spaetere Ausbaustufe: kein UI-Eintrag,
+kein versteckter Schalter; auch ein manuell eingetragenes 3 ergibt 1x.
+Neuer Key pushback_time_factor; alten pushback_speed_factor nicht umdeuten
+oder loeschen. Vollstaendiges numerisches Parsing; fehlend, fremder Wert,
+Resttext oder nicht endlich -> 1x. Staged UI, Speichern nur idle, bestehende
+Save-/Reloadguards erhalten. Snapshot nach erfolgreichem bp_can_start().
+Wiederholter Start/Reconnect aendern die Auswahl nicht.
+
+Unabhaengig von Fast Ground Handling, Classic/GO, Recall und Auto-Disconnect.
+Automatische Emergency-Tow-Routen sind enthalten. Manual mit/ohne Yoke, Slave-
+Physik, freie Tugfahrt und alle Handlingphasen bleiben auf dem Originalpfad.
+Keine neuen Flugzeugpositions-/Geschwindigkeitswrites, keine globale Zeit,
+keine Aenderung von Tugkonfigurationen, Planner/Kompass, Cache oder Bugrad-
+Produzenten (ABI 1, 17 Elemente; beim Tragen weiterhin keine Rotation).
+Die aktive Planneranzeige ist geometrisch, der inaktive Previewblock kein
+Buildblocker. Fuer den spaeteren Zibomod-Port keine libacfutils-Abhaengigkeit.
+
+## 2. Lokale Fahrregelung
+
+1x verzweigt vor jeder neuen Rechnung auf den heutigen Defaultpfad. F=1.5
+oder 2 wirkt nur auf automatische Bewegung des Masters. Keine Mutation der
+globalen bp.d_t, bp.cur_t, Fahrzeugkonfiguration oder Messwerte. X-Plane
+integriert Kraefte; kein mehrmaliges Durchlaufen desselben Messframes.
+
+drive_segs erhaelt die echte Geometrie aus corr_acf_pos(), deren Geschwindigkeit
+geteilt durch F, das originale Profil nach pb_step_tug_load und F*dt als
+lokales Reglerintervall. Gerade, Kurve, Crawl, Overcorrection, rekursiver
+Lookahead und Vorzeichen bleiben damit im Referenzraum. F multipliziert
+den resultierenden longitudinalen Sollwert genau einmal. Vor der einmaligen
+Umrechnung auf Tugtempo mittels max(cos(nw_defl),0.1) greift Abschnitt 3.
+Kein zweiter unskalierter Tugcap. Reibungscaps MED/POOR bleiben hingegen
+absolute physische Tug-m/s-Grenzen. Bei Begrenzung ist Zeitgewinn nachrangig.
+
+Weg, Radius und Lenkwinkel unveraendert; Geschwindigkeiten und Gierraten
+physisch mal F, nominale Beschleunigungen mal F^2. Bei 2x also 1.00 statt
+0.25 m/s^2 beim Anfahren und 0.68 statt 0.17 m/s^2 bei der Bremsplanung.
+Das haelt ideal v^2/(2*a) konstant, garantiert aber keinen realen Bremsweg.
+
+**G1: begrenzter Geschwindigkeitsregler statt F^3-Kraftschritten.** Nur im
+Fastzweig von push_at_speed einen physischen PI-Geschwindigkeitsregler
+verwenden. v ist die signierte reale Ausgabe von tug_speed(), u der begrenzte
+Tugsollwert. Je echtem Sample: e=u-v; A=F^2*max_accel des Aufrufers;
+a_cmd=clamp(kp*e+I,-A,A), kp=2*F/s, ki=F^2/s^2. I hat die Einheit m/s^2.
+Die Integrationsaenderung ki*e*dt nur uebernehmen, wenn sie Beschleunigungs-,
+Kraft- oder Rampensaettigung nicht weiter vertieft (oder aus ihr herausfuehrt).
+Keine alte 100x-Breakaway-Verstaerkung im Fastregler. Konstanten sind
+Startwerte fuer den Harness, keine bereits validierte Abstimmung.
+
+Sollkraft=m*a_cmd; pro realer Sekunde hoechstens C Newton hinzufuegen/abbauen,
+C=FORCE_PER_TON*m/1000, und Betrag vor jedem Write <= C. Damit bei 2x/20 FPS
+hoechstens 5% C pro Sample statt 40% C mit blindem F^3. Einzustellende
+Start-/Haftreibung ist expliziter Versuch: reicht die nominale Kraft nicht
+zum Losfahren, keine beliebige Krafterhoehung. Bei angeforderter Fahrt
+(auch Crawl und bewegte Ausrichtung) den festen Bezugspunkt und die Simzeit
+merken. Nach 0.02 m Fortschritt in Fahrtrichtung oder Segmentwechsel neu
+ankern; ohne Fortschritt fuer 2 s -> Fehlerhalt. Bei Hold, Gangwechsel,
+Nullziel, Lichtstopp, Piloteninterrupt und Pause disarmen. Damit ist auch
+1.5x-Crawl bei 0.15 m/s geschuetzt.
+
+Nur endliche Daten und 0<dt<=0.1 s integrieren; echte Simulatorpause erzeugt
+keinen Nachholschritt. Bei Zeitreset, ungueltiger Beobachtung oder groesserer
+Luecke: Fastbewegung sperren, keine neuen Kraft-/Quaternionbeitraege aus
+diesem Sample, Historie/Integral nullen, Zeit und Pose beim naechsten
+gueltigen Sample neu ankern. Danach Fehlerhalt mit Nullsollwert; kein
+automatischer Neustart. Der Guard muss vor fastabhaengigen Draw-/Tug- und
+Step-Berechnungen greifen, nicht erst in push_at_speed().
+
+## 3. Bremsweg und Fehlerhalt (G2)
+
+Fuer jeden engeren Geschwindigkeitswechsel der verbleibenden gleichgerichteten
+Route eine physische Laengsgrenze bilden. Nicht nur Distanz bis zum Ende
+betrachten: Geraden, Kurveneintritt, Richtungswechsel, letzte Endausrichtung.
+Gerade: Projektion des festen Bezugspunkts wie in drive_segs; Bogen: Restbogen
+im richtigen Drehsinn plus folgende Segmentlaengen. Bereich endet am ersten
+Richtungswechsel. Winkel-/Querbeschleunigungslimits des nachfolgenden Bogens
+bestimmen dessen Eintrittstempo. Berechnung vor Segmentfreigabe nur lesend,
+keine zweite Liste konsumieren. Wiederholte Abfragen duerfen keinen
+zusaetzlichen Zustandsuebergang bewirken.
+
+An jeder Grenze mit Restweg d und physischem Eintrittstempo w wird die
+zulaessige Betraggeschwindigkeit aus einem konservativen Modell begrenzt.
+Verwende identische longitudinale Einheiten fuer v,w,d; nicht Tugtempo mit
+Rumpfstrecke vermischen. Bei starkem Schlepperwinkel die reale axiale
+Kraftkomponente der tatsaechlichen Lenkung beruecksichtigen. Fuer die
+aktive Bremsrechnung sei g=max(0,cos(steer)), s das Vorzeichen der Bewegung,
+A_brake=0.25*F^2 m/s^2 die ausdrueckliche Gegenkraftautoritaet des
+Fastfahrreglers und b=min(0.17*F^2, 0.8*g*min(A_brake,C/m)) in m/s^2.
+Die zweite Schranke haelt Kraftreserve frei, beweist keine Haftung.
+Bei g<=0 oder b<=0 nicht dividieren, sondern Fehlerhalt. Gegenkraftbetrag
+B=m*b/g, Rampenrate R=C pro Sekunde, P=s*last_force. Bis zur Reaktion
+nach hoechstens h=0.1 s kann die Zugkraft noch steigen: P_hi=min(C,P+R*h).
+Deshalb t_r=h+max(0,P_hi+B)/R; in jedem Sample neu bestimmen.
+Waehrend t_r weiterhin moegliche Beschleunigung a_plus einrechnen, nicht
+bloss v*t_r. Konservativ a_plus=max(0,P_hi/m,A_brake), ohne Fremdkraefte.
+
+    v_r = v + a_plus*t_r
+    D(v,w) = v*t_r + 0.5*a_plus*t_r^2 + max(0, v_r^2-w^2)/(2*b)
+
+Nur fuer Abbremsung (v>w) anwenden. Auf [w, requested_speed] per 24 festen
+Bisektionsschritten hoechsten zulaessigen Wert mit D<=d bestimmen, sonst w;
+kleinste Grenze aller folgenden Einschraenkungen verwenden. Das ist eine
+zusaetzliche Geschwindigkeitsobergrenze, kein Schreibzugriff auf Bremsen.
+Letzter Segmentabschluss benoetigt den vorhandenen Crawl zum Ueberfahren
+der geometrischen Grenze: Eintritt w=F*CRAWL_SPEED, danach STOPPING bis zum
+realen Stillstand; erlaubten Kriech-Nachlauf im Endlagenvergleich mitpruefen.
+Kein Zielsollwert Null vor der Linie, der drive_segs dort festhalten koennte.
+Am Richtungswechsel ebenfalls Crawl bis zur Segmentfreigabe, danach Nullziel.
+Gegenrichtung erst bei realem Stillstand (<0.08 m/s) UND nach vier realen
+Simsekunden freigeben. Keine neuen Bremsschreibstellen.
+
+Nur wenn die Huelle bindet UND das Isttempo die modellierte Bremsgrenze
+erreicht, G1-Integral nullen und Zielkraft -s*B statt PI-Antrieb vorgeben;
+gleiche reale Rampe/Clamp. Aus dem Stand unterhalb der Huelle regulaer
+anfahren; bei Erreichen des Eintrittstempos die Gegenkraft nicht bis zum
+Vorzeichenwechsel halten. Bei fehlender positiver Bremsreserve,
+Ueberschreiten der Huelle mit tatsaechlichem Tempo um >0.15 m/s fuer
+zwei gueltige Samples oder ausbleibender Verzogerung trotz voll aufgebauter
+Gegenkraft fuer 0.25 s: Fehlerhalt verriegeln. Kein Segmentfortschritt,
+keine weitere Ausrichtung, kein neues op_complete; kontrolliertes Nulltempo,
+bis der echte Stillstand erreicht ist. Sichtbarer Grund, vorhandener
+Stop/Abort bleibt bedienbar, kein selbsttaetiges Resume oder Disconnect.
+Fremdschub, Glatteis und unbekannte Aircraftplugins lassen keinen universell
+garantierten Bremsweg zu. Die Huelle ist ein Planungsmodell; Fehlerhalt
+erkennt dessen Verletzung, macht bereits zurueckgelegten Weg nicht rueckgaengig.
+
+Fehlerlatch hat Vorrang vor Leerlisten-Sprung, Resume und STOPPING-Ausrichtung;
+nicht ueber bp_request_pause abbilden (nur in PUSHING zulaessig). Expliziter
+Soft Stop im Fehlerhalt merkt Endanforderung, behaelt Nullziel bis zum echten
+Stillstand, dann ueber den bestehenden stationaeren stop_from_pause_hold-Pfad
+ohne Translation in den normalen Parkbremshandoff. Nie eine Parkbremse
+simulieren. Hard Abort hat uneingeschraenkt Vorrang. op_complete ist im
+heutigen Protokoll bereits beim Routenende ein Signal an den Slave, NICHT
+die Bestaetigung der Parkbremse. Bei spaeterem Fehler in STOPPING ein schon
+gesendetes Signal weder zuruecknehmen noch erneut senden; Fehlerhalt ist
+lokal keine Freigabe. Gekoppelten Fehlerfall gesondert pruefen: ohne Beleg
+fuer synchrones Anhalten keinen beschleunigten gekoppelten Betrieb freigeben.
+
+## 4. Kursowner, Kontakt und Uebergaben
+
+**G3: Bestehende zwei Kursbeitraege nachbilden, nicht einen davon entfernen.**
+Bei angekoppeltem Master im Fastfahrkontext (Tug ohne eigene Segmente)
+entspricht der erste Beitrag dem leeren tug_run()-Schritt der 1x-Fahrt:
+v_tug_alt aus dem privaten zuletzt gueltigen Flightloop-Sample (am Eintritt
+mit aktueller gueltiger tug_speed()-Messung initialisieren), nie aus einem
+von draw_tugs/pos_only ueberschriebenen tug->pos.spd. Am Ende des zweiten
+Kursbeitrags dessen reale Messgeschwindigkeit fuer den naechsten Loop sichern;
+nach Zeitfehler Historie invalidieren. v_ref_alt=v_tug_alt/F, in dt_motion gegen Null mit TUG_MAX_ACCEL bewegen;
+wenn !steer_override, Winkel wie bisher mit TUG_STEER_RATE*dt_motion
+neutralisieren. Erstes Kursinkrement aus v_ref_neu*dt_motion/r. Fuer
+anschliessendes tug_anim den Zwischenwert wieder in reale m/s umrechnen
+und dt_sim verwenden. Sound/TE nicht mit virtueller Zeit treiben. Zweiter
+Beitrag unveraendert in tug_pos_update(): beobachtetes reales tug_speed()
+mal dt_sim/r, harte Winkelanschlaege und echte Bugradanbindung. draw-Pfad
+pos_only niemals integrieren. Keine weiteren Kursbeitraege. Faktor 1, Slave
+und freifahrender Tug behalten tug_run() ungeaendert. Fuer turn_nosewheel
+Tugtempo und Aircraft-Gierrate durch F teilen, fuer Winkelintegration und
+Stellrate dt_motion benutzen. Nicht nochmals die integrierte Quaternion-
+korrektur multiplizieren. Rueckwaertsasymmetrie des signierten Vergleichs
+nach ang_vel_speed_limit nicht nebenbei reparieren; beide Seiten testen.
+
+**G4: Ein physischer Kraftwert fuer alle Writer.** Nach Samplevalidierung
+und Piloteninterrupt erst G1-Kandidaten begrenzen, dann Bodenkontakt lesen.
+Ohne Kontakt ausschliesslich die vorher tatsaechlich ausgegebene Kraft
+mit max(0,abs(last_force)-2*C*dt) ohne Vorzeichenwechsel zur Null fuehren;
+Integral sperren und Fehlerhalt verriegeln. Vor Ausgabe erneut auf +/-C
+begrenzen. Aus derselben Endkraft Fx/Fz, axialer Beitrag, Yaw und kraft-
+bedingtes Pitchmoment berechnen; bestehender zusaetzlicher Tuggewichtsanteil
+nur mit realer Masse/dt. Genau diese Endkraft in last_force ablegen. Bei
+Piloteninterrupt bestehende Neutralisierung hat Vorrang, kein PI-Nachschreiben
+und gespeicherte Kraft/Integral nullen. Keine neuen Dataref-Owner.
+
+F bleibt im normalen Fahrt-/Pause-/Licht-/bewegten STOPPING-Pfad erhalten,
+auch wenn bp_stop die Segmente geloescht hat. Vier Sekunden Gangwechsel,
+Piloteneingriffe und Wartezeiten bleiben reale Simzeit. Soft Stop aus
+stationaerem Hold darf keine Fahrt starten. Sind in pb_step_stopping die
+Original-Ausrichtungsbedingungen und abs(v_phys)<0.08 m/s erfuellt,
+Abschluss einmalig vor den bestehenden Brakewrites verriegeln; folgende
+STOPPING-Frames nicht wieder beschleunigen. Direktsprung auf STOPPED, Hard
+Abort, Disable und Reconnect invalidieren die Fahrhistorie ebenfalls.
+STOPPED bis Complete ausschliesslich Originalpfad. Keine Aenderungen an
+pbrake_is_set(), brakes_set(), Bremsdatarefs, Ignore-/Slave-Semantik,
+fast_brake_handoff.h, Resetstellen, VERIFIED/RESTORE oder Cleanupguards.
+
+## 5. Implementierungsgrenze und Nachweis
+
+Erwarteter Diff: cfg.cpp/.h (Setting/Getter), pushback_speed.h und kleiner
+reiner Bewegungshelper, bp.c/.h (Kontext, Aufrufer, Writer), driving.c/.h
+(lesender Lookahead, alte Cap-API ersetzen), tug.c/.h (eng begrenzter erster
+gekoppelter Schritt), Diagnosewriter, POT, README/USER_GUIDE und registrierte
+Tests. Keine Aenderungen an Buildchain, Assets, Port oder Simulatorzeit.
+Diagnose default-off: F, echte/Referenz-Soll-/Istwerte, Kraft vor/nach Limit,
+Restweg, b, t_r, aktive Grenze und Fehlergrund. SI-Einheiten kenntlich machen;
+Metadaten bei Moduswechsel korrekt rotieren. Keine Produktionslogflut.
+
+1. Faktor 1 bitgleich gegen 72a3295; geschuetzte Writer-/Handoffsequenzen
+   und bestehende Drivingreferenz c202b437 erhalten. Neue Configwerte
+   einschliesslich abgewiesenem 3x, Close/Save/Reload und Reconnect testen.
+2. Fuer 1.5 und 2 echte Controller-/Lenk-/Writerpfade mit rueckgekoppeltem
+   Testmodell bei 20/30/60/120 FPS und variablen Frames. Gerade, kurze
+   Route, beide Kurvenseiten vor-/rueckwaerts, Richtungswechsel, Kurvenende,
+   Off-Path, Stop/Resume, Fehlerhalt, Zeitreset, Kontaktverlust, Reibung,
+   Gegenkraft/Blockade. Explizit P<C bei letztem steigendem Antriebsframe:
+   fuer h=0.1 s muss die Reserve den Wechsel von min(C,P+R*h) bis -B
+   abdecken, auch in Rueckwaertsfahrt. Endliche Outputs, kein Integralaufstau, kein
+   Nachholen, korrektes Vorzeichen und Weg-/Winkelgrenzen pruefen.
+3. Beide gekoppelten Kursbeitraege einzeln gegen zeittransformiertes 1x
+   vergleichen; Draw, Audio, Bugradstatus und Slave ohne Doppelfaktor.
+   Classic/GO x Fast Handling an/aus x 1/1.5/2, Ignore an/aus, Manual,
+   Reconnect, GRAB/WINCH, AP88. Realistische Parkbremse: Pedale gehalten,
+   losgelassen, erneut gedrueckt; keine neue Bremsschreibstelle.
+4. Simulatorvergleich mit gleichem Tug/Flugzeug, Masse, Route und trockener
+   Piste, einschliesslich Standardflugzeug und privatem Zibomod. Reine
+   Bewegungszeit getrennt von Handling und Bestaetigungen messen. Bei langen,
+   unbegrenzten Routen gilt T(F)*F/T(1)=1 +/- 0.10; bei 2x also 45-55%
+   der Referenzfahrzeit. Auch Kurven und Anfahren separat vergleichen.
+   Endlage und Spur innerhalb derselben vor Kandidatenlauf festgehaltenen
+   1x-Toleranz. Fehlerlauf/Halt niemals als schnellen Erfolg mitzaehlen.
+
+Die Zahlen sind pruefbare Kandidatenparameter, kein Nachweis fuer Stabilitaet,
+Haftung oder erreichte Fahrzeit. Erst Trockentests, dann Simulatorabnahme;
+3x erfordert spaeter eine eigene Pruefung, keine Freischaltung per Config.
+Build, Packaging, Deploy und Git-Schreiboperationen bleiben separat.
+
+## 6. Reviewstatus
+
+Der vorige Review identifizierte Kraftdiskretisierung, Bremsweg bei Saettigung,
+gekoppelte Kursintegration und Kontakt-Recovery als offene Entscheidungen.
+Abschnitte 2-4 legen fuer Stufe 1 konkrete Kandidaten fest. Der unabhaengige
+Review dieser Fassung identifizierte vier konkrete Praezisierungen: tatsaechliche axiale
+Gegenkraft, Blockade bei 1.5x-Crawl, Ausstieg aus Fehlerhalt und
+Draw-unabhaengige Tug-Geschwindigkeitshistorie. Diese stehen jetzt in
+Abschnitten 2-4. Im Gegenreview blieb eine Korrektur der Reaktionsreserve
+offen: Kraftanstieg im letzten Frame vor der Gegenkraft. Obige Formel und
+Testfall uebernehmen die konkrete Reviewkorrektur. Damit ist der Kandidat
+fuer Implementierung und Trockentests spezifiziert, nicht fuer eine
+Auslieferung validiert. Kein Laufzeit- oder Stabilitaetsnachweis.

@@ -231,6 +231,16 @@ test_formatting_only_changes_for_display_values(void)
     raw.step = PB_STEP_STOPPING;
     assert(ground_ops_state_update(&state, &raw));
     assert(state.snapshot.transition_sequence == transition + 1);
+    raw.motion_fault = "Test motion fault";
+    assert(ground_ops_state_update(&state, &raw));
+    assert(state.snapshot.primary_action == GROUND_OPS_ACTION_END_DISCONNECT);
+    assert(strcmp(state.snapshot.detail, raw.motion_fault) == 0);
+    raw.step = PB_STEP_PUSHING;
+    assert(ground_ops_state_update(&state, &raw));
+    assert(state.snapshot.primary_action == GROUND_OPS_ACTION_END_DISCONNECT);
+    raw.motion_fault = NULL;
+    assert(ground_ops_state_update(&state, &raw));
+    assert(state.snapshot.primary_action == GROUND_OPS_ACTION_PAUSE);
 }
 
 static void

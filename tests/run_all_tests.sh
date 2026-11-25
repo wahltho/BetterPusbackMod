@@ -5,6 +5,7 @@ test_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 python3 "$test_dir/run_reload_safety_tests.py"
 python3 "$test_dir/run_pushback_speed_tests.py"
+python3 "$test_dir/run_attached_motion_tests.py"
 
 for runner in \
     run_airport_cache_manifest_tests.sh \
@@ -46,6 +47,12 @@ printf 'Running runtime telemetry disabled test\n'
 repo_dir=$(CDPATH= cd -- "$test_dir/.." && pwd)
 telemetry_test_dir=$(mktemp -d)
 trap 'rm -rf "$telemetry_test_dir"' EXIT HUP INT TERM
+for test in motion_force_test motion_envelope_test; do
+    printf 'Running %s\n' "$test"
+    "${CC:-cc}" -std=c99 -Wall -Wextra -Werror -I"$repo_dir/src" \
+        "$test_dir/$test.c" -lm -o "$telemetry_test_dir/$test"
+    "$telemetry_test_dir/$test"
+done
 cc -std=c99 -Wall -Wextra -Werror \
     -I"$repo_dir/src" -I"$repo_dir/../libacfutils/src" \
     "$repo_dir/src/telemetry.c" "$test_dir/telemetry_disabled_test.c" \

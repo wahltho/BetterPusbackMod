@@ -164,7 +164,10 @@ bp_telemetry_open(bp_telemetry_t *telemetry, const char *filename,
         "target_speed_raw_mps,target_speed_limited_mps,"
         "max_accel_cmd_mps2,decelerating,applied_force_n,force_limit_n,"
         "force_fraction,heading_error_deg,left_brake_ratio,"
-        "right_brake_ratio,parking_brake_set,runway_friction,frame_dt_s\n");
+        "right_brake_ratio,parking_brake_set,runway_friction,frame_dt_s,"
+        "motion_factor,motion_limit_mps,motion_requested_force_n,"
+        "motion_distance_m,motion_decel_mps2,motion_reaction_s,"
+        "motion_fault_reason\n");
     fflush(telemetry->fp);
 
     return (B_TRUE);
@@ -320,6 +323,20 @@ bp_telemetry_write(bp_telemetry_t *telemetry,
     fprintf(telemetry->fp, ",%d,%d,", sample->parking_brake_set,
         sample->runway_friction);
     write_csv_double(telemetry->fp, sample->frame_dt_s);
+    fputc(',', telemetry->fp);
+    write_csv_double(telemetry->fp, sample->motion_factor);
+    fputc(',', telemetry->fp);
+    write_csv_double(telemetry->fp, sample->motion_limit_mps);
+    fputc(',', telemetry->fp);
+    write_csv_double(telemetry->fp, sample->motion_requested_force_n);
+    fputc(',', telemetry->fp);
+    write_csv_double(telemetry->fp, sample->motion_distance_m);
+    fputc(',', telemetry->fp);
+    write_csv_double(telemetry->fp, sample->motion_decel_mps2);
+    fputc(',', telemetry->fp);
+    write_csv_double(telemetry->fp, sample->motion_reaction_s);
+    fputc(',', telemetry->fp);
+    write_csv_string(telemetry->fp, sample->motion_fault_reason);
     fputc('\n', telemetry->fp);
 
     telemetry->last_sample_time_s = sample->sim_time_s;

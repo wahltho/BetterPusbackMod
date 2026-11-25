@@ -92,6 +92,7 @@ void bp_emergency_tow_session_end_notify(bool_t completed);
 void bp_done_notify(void);
 
 const char *bp_get_lang(void);
+bool_t bp_coupling_active(void);
 
 void bp_sched_reload(void);
 

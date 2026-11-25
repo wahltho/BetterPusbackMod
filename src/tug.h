@@ -209,6 +209,8 @@ void tug_set_pos(tug_t *tug, vect2_t pos, double hdg, double spd);
 bool_t tug_drive2point(tug_t *tug, vect2_t dst, double hdg);
 
 void tug_run(tug_t *tug, double d_t, bool_t drive_slow);
+void tug_run_attached(tug_t *tug, double d_t, double factor,
+    double previous_speed);
 
 void tug_anim(tug_t *tug, double d_t, double cur_t);
 

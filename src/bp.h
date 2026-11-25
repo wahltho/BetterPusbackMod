@@ -98,6 +98,8 @@ typedef struct {
 
     double last_steer;
     double last_force;
+    double motion_integral;    /* Fast PI acceleration, m/s^2 */
+    double motion_brake_force; /* signed physical N; NAN for PI */
     bool_t pause_requested;
     bool_t pause_hold;
     bool_t stop_from_pause_hold;
@@ -194,6 +196,9 @@ void bp_fini(void);
 bool_t bp_start(void);
 
 bool_t bp_stop(void);
+
+bool_t bp_motion_fault_held(void);
+const char *bp_motion_fault_reason(void);
 
 bool_t bp_request_pause(void);
 

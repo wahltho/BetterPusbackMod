@@ -23,7 +23,7 @@
 extern "C" {
 #endif
 
-#define BP_TELEMETRY_SCHEMA_VERSION 7
+#define BP_TELEMETRY_SCHEMA_VERSION 8
 
 /*
  * Runtime CSV recording is diagnostic-only. Distribution builds leave it
@@ -130,6 +130,13 @@ typedef struct {
     int parking_brake_set;
     int runway_friction;
     double frame_dt_s;
+    double motion_factor;
+    double motion_limit_mps;
+    double motion_requested_force_n;
+    double motion_distance_m;
+    double motion_decel_mps2;
+    double motion_reaction_s;
+    const char *motion_fault_reason;
 } bp_telemetry_sample_t;
 
 typedef struct {

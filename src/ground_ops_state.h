@@ -118,6 +118,7 @@ typedef struct {
     bool replan_available;
     bool pause_requested;
     bool pause_held;
+    const char *motion_fault; /* stable controller-owned reason, NULL if none */
     bool clear_signal_displayed;
     bool clear_signal_acknowledged;
     bool disconnect_approved;

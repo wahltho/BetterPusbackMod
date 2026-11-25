@@ -599,6 +599,9 @@ stop_pb_handler(XPLMCommandRef cmd, XPLMCommandPhase phase, void *refcon)
     }
 
     (void)bp_stop();
+    /* Faulted motion must finish its stationary handoff first. */
+    if (bp_motion_fault_held())
+        return (1);
     op_complete = B_TRUE;
     if (!slave_mode)
     {
@@ -994,6 +997,14 @@ bp_get_lang(void)
     if (conf_get_str(bp_conf, "lang", &c))
         return (c);
     return (acfutils_xplang2code(XPLMGetLanguage()));
+}
+
+bool_t
+bp_coupling_active(void)
+{
+    return slave_mode ||
+        (smartcopilot_present && dr_geti(&smartcopilot_state) != COUPLED_STATE_OFF) ||
+        (sharedflight_present && dr_geti(&sharedflight_state) != COUPLED_STATE_OFF);
 }
 
 static void

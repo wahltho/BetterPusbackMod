@@ -54,7 +54,14 @@ main(int argc, char **argv)
         .aircraft_speed_mps = -0.1,
         .aircraft_accel_mps2 = -0.2,
         .applied_force_n = -12000,
-        .force_limit_n = 480000
+        .force_limit_n = 480000,
+        .motion_factor = 1.5,
+        .motion_limit_mps = 1.25,
+        .motion_requested_force_n = -37500,
+        .motion_distance_m = 25,
+        .motion_decel_mps2 = 0.25,
+        .motion_reaction_s = 0.5,
+        .motion_fault_reason = "test,reason"
     };
     FILE *fp;
     char data[16384];
@@ -84,7 +91,9 @@ main(int argc, char **argv)
     data[n] = '\0';
     fclose(fp);
 
-    assert(strstr(data, "# schema_version,7") != NULL);
+    assert(strstr(data, "# schema_version,8") != NULL);
+    assert(strstr(data, ",1.500000000,1.250000000,-37500.000000000,25.000000000,0.250000000,"
+        "0.500000000,\"test,reason\"") != NULL);
     assert(strstr(data, "# tug_name,\"AST-3F.tug\"") != NULL);
     assert(strstr(data, "# effective_max_rev_speed_mps,1.110000000") !=
         NULL);

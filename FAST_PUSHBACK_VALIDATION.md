@@ -1,5 +1,41 @@
 # Fast Pushback: Source- und Trockentestnachweis
 
+## Lokale Bewegungsskalierung, 2026-11-25
+
+Referenz: `72a329537104c93b432859cc1600136f653aa187`. Anders als beim
+historischen Reisecap unten skaliert `Pushback speed` nur die automatische
+Bewegung; X-Planes Simulationszeit wird nicht geaendert. 1x ist die Referenz.
+Die vorhandene Parkbremsuebergabe und Fast Ground Handling sind unabhaengig.
+
+Beispiel aus dem ebenen Trockentest (300 m gerade rueckwaerts, 20 FPS):
+
+| Auswahl | Fahrzeit bis zum Stillstand im Test | Endposition |
+| --- | ---: | ---: |
+| 1x (Referenz) | 277,95 s | 301,214 m |
+| 1,5x | 185,30 s | 300,031 m |
+| 2x | 139,95 s | 300,049 m |
+
+Die Abweichung von 1,214 m bei 1x tritt auch im eingefrorenen Referenzstand
+auf. Sie ist kein Sollwert fuer 1,5x oder 2x. Die Messwerte gelten fuer das
+Testmodell, nicht als Zusage fuer jede Strecke, jeden Tug oder X-Plane.
+Insbesondere ersetzen Regler- und Kurvenstichproben keinen durchgehenden
+Kurvenlauf im Simulator. Kein Plugin-Build oder Deploy fuer diesen Nachweis.
+
+Bei 300 m vor- und rueckwaerts ueber 20, 30, 60, 120 und variable FPS:
+1,5x benoetigte 66,7-68,2 % der Referenzfahrzeit, 2x 50,4-51,7 %.
+Die Kurvenstichproben vergleichen Sollgeschwindigkeit und Lenkung bei links
+und rechts laufenden Boegen in beiden Fahrtrichtungen.
+
+1x-Vergleich: 5040 Driving-Faelle sowie bytegleiche Controller-Traces bis
+zur ersten im Original undefinierten Entscheidung. Im letzten Kriechabschnitt
+kann der Planer zurueckkehren, ohne sein Verzoegerungsflag zu schreiben.
+Der automatische Aufrufer initialisiert es jetzt mit `B_FALSE`; explizite
+Planerwerte bleiben massgeblich. Fuer den **vollstaendigen** Trace dient
+eine zweite Kopie von 72a3295 mit exakt diesem einen initialisierten lokalen
+Wert als Referenz. Fuer undefiniertes Altverhalten wird keine Paritaet behauptet.
+
+## Historischer Nachweis: Reisecap
+
 Stand: 2026-11-24. Referenz auf `main`:
 `c202b4377869a1fe370ab1ac9760709f911621ce`.
 

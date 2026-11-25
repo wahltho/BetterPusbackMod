@@ -29,6 +29,12 @@ BetterPushback changes state.
 
 The samples include:
 
+Schema 8 appends the active BPB movement factor (not X-Plane speed),
+the longitudinal braking envelope's speed limit, distance, deceleration
+and reaction time, requested tractive force before limiting, and the reason
+for a latched movement fault. Unavailable
+numeric values are blank. Diagnostic CSV recording remains off by default.
+
 - aircraft and tug position, heading, and speed;
 - aircraft acceleration, jerk, and yaw rate;
 - tug steering angle and calculated turn radius;

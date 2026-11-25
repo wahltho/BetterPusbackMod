@@ -145,13 +145,14 @@ on the successful handoff path. After verification, renewed pedal presses do
 not block lowering or disconnect; losing the parking brake restores BPB's hold.
 While waiting, the status asks the pilot to release the pedals or abort.
 
-**Pushback speed factor** is an independent global preference below Fast Ground
+**Pushback speed** is an independent global preference below Fast Ground
 Handling: Normal (1x), 1.5x or 2x, with Normal as the default. Save preferences
 to retain the selection; it is captured when the next operation starts.
-It raises only automatic pushback/towing cruising-speed limits. Tug limits,
-turning, acceleration, stopping and the parking-brake handoff remain governed
-by the existing controller. 2x does not guarantee half the total time.
-Manual towing, tug approach/departure and handling animations are not sped up.
+It speeds up automatic towing and pushback, including curves, acceleration
+and deceleration. X-Plane's simulation speed and parking-brake checks do
+not change. Manual towing, tug approach/departure and handling animations
+are not sped up. After upgrading from the old cruise-limit option, select
+the desired speed again; the new option defaults to Normal.
 
 The old **Classic Mode** preset is retired. Existing enabled Classic settings
 are migrated once to Legacy magic squares, automatic completion, marshaller

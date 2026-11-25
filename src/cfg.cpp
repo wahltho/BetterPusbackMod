@@ -159,11 +159,11 @@ const char *legacy_routes_tooltip =
 const char *fast_ground_handling_tooltip =
     "Skip artificial ground handling waits and animations, including "
     "disconnect after parking brake set. Does not change towing speed; "
-    "use Pushback speed factor separately. Brake checks remain unchanged.";
+    "use Pushback speed separately. Brake checks remain unchanged.";
 const char *pushback_speed_tooltip =
-    "Raises the cruising-speed limit of automatic pushback and towing. "
-    "Tug, turn and stopping limits still apply. Does not change manual "
-    "towing or ground handling. 2x does not guarantee half the total time. "
+    "Speeds up automatic pushback and towing, including turns, acceleration "
+    "and deceleration. Does not change simulator speed, manual towing, "
+    "ground handling or parking-brake checks. "
     "Saved changes apply to the next operation.";
 const char *disco_when_done_tooltip =
     "Never ask and always automatically disconnect "
@@ -1085,12 +1085,12 @@ void SettingsWindow::buildInterface() {
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
-    ImGui::Text("%s", _("Pushback speed factor"));
+    ImGui::Text("%s", _("Pushback speed"));
     Tooltip(_(pushback_speed_tooltip));
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(combowithWidth);
     const char *speed_choices[] = {_("Normal (1x)"), _("1.5x"), _("2x")};
-    (void)ImGui::Combo("##pushback_speed_factor", &pushback_speed_selection,
+    (void)ImGui::Combo("##pushback_time_factor", &pushback_speed_selection,
                        speed_choices, 3);
 
     ImGui::TableNextRow();
@@ -1274,7 +1274,7 @@ void SettingsWindow::SaveConfig(void) {
   SetVisible(B_FALSE);
   (void)conf_set_b(bp_conf, "legacy_route_recall", legacy_routes);
   (void)conf_set_b(bp_conf, "fast_ground_handling", fast_ground_handling);
-  conf_set_d(bp_conf, "pushback_speed_factor",
+  conf_set_d(bp_conf, "pushback_time_factor",
              bp_pushback_speed_choice(pushback_speed_selection));
   (void)bp_conf_save();
   set_pref_widget_status(B_FALSE);
@@ -1367,7 +1367,7 @@ bool_t bp_fast_ground_handling(void) {
 double bp_pushback_speed_factor(void) {
   const char *value = NULL;
   char *end;
-  if (bp_conf == NULL || !conf_get_str(bp_conf, "pushback_speed_factor", &value))
+  if (bp_conf == NULL || !conf_get_str(bp_conf, "pushback_time_factor", &value))
     return 1.0;
   const double factor = strtod(value, &end);
   if (end == value)

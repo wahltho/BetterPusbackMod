@@ -191,21 +191,24 @@ There is no timeout-based disconnect; use **Abort pushback** if an input never
 returns below the threshold. Successful handoff and final cleanup do not write
 a synthetic zero over pilot brake input.
 
-### Pushback speed factor
+### Pushback speed
 
-The separate **Pushback speed factor** selection, directly below Fast Ground
+The separate **Pushback speed** selection, directly below Fast Ground
 Handling, offers **Normal (1x)**, **1.5x** and **2x**. Normal is the default.
 Choose **Save preferences** to keep the value across restarts. It applies to
 the next operation, not an operation already underway, and works independently
 of Fast Ground Handling, interface choice and saved-route preferences.
+Known active shared-cockpit connections retain normal speed. A movement fault
+stops automatic driving; use Stop to end from a stationary hold, or Abort.
 
-This raises the cruising-speed limit on accepted automatic pushback and tow
-routes, including automatic Emergency Tow. It does not accelerate manual
-towing, tug approach/departure, lifting or disconnect. Loaded-tug speed caps,
-turning limits, acceleration, braking and the parking-brake handoff still
-apply. Tight turns, short routes or a slower tug may give little or no speed
-increase; **2x does not guarantee half the total time**. Stopping from a higher
-speed can take more distance. Normal (1x) uses the original driving path.
+The selection speeds up movement along an automatic route, including turns,
+acceleration and deceleration. X-Plane's simulation rate does not change.
+It also applies to automatic Emergency Tow, but not manual towing, tug
+approach/departure, lifting or disconnect. Parking-brake checks and the
+handoff are unchanged. The factor applies to driving, not waiting for
+clearance or the pilot. Grip and braking distance can limit the time saved.
+Normal (1x) uses the original driving path. After upgrading from the earlier
+cruise-speed option, choose the new speed explicitly; its default is Normal.
 
 Saving/reloading preferences is blocked until the operation has fully ended,
 including after Stop while the tug is still disconnecting. A reload request

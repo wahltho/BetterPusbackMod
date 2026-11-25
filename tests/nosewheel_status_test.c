@@ -149,6 +149,7 @@ static void bp_fast_brake_handoff_reset(void *state, bool_t required)
 static void bp_reconnect_notify(void) { reconnect_notifications++; }
 
 #include "nosewheel_reasons.inc"
+static void motion_reset(void) {}
 #include "nosewheel_producers.inc"
 
 static uint64_t counter(int offset)

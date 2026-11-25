@@ -701,6 +701,55 @@ drive_segs_with_speed_limits(const vehicle_pos_t *pos, const vehicle_t *veh,
         out_speed, out_decelerating, limits);
 }
 
+bool_t
+drive_route_envelope(const vehicle_pos_t *pos, const vehicle_t *veh,
+    const list_t *segs, double factor, double actual_mps, double requested_mps,
+    double steer_deg, double mass_kg, double force_cap_n, double last_force_n,
+    motion_envelope_t *out)
+{
+    const seg_t *head = list_head(segs);
+    motion_envelope_t e;
+    double distance = 0;
+
+    if (head == NULL || !isfinite(pos->pos.x) || !isfinite(pos->pos.y) ||
+        !isfinite(pos->hdg) || !isfinite(veh->fixed_z_off) ||
+        !motion_envelope_begin(&e, head->backward ? -1 : 1, factor,
+        actual_mps, requested_mps, steer_deg, mass_kg, force_cap_n,
+        last_force_n))
+        return B_FALSE;
+    const vect2_t fixed = veh_pos2fixed_pos(pos, veh);
+    if (!isfinite(fixed.x) || !isfinite(fixed.y))
+        return B_FALSE;
+    const seg_t *seg;
+    for (seg = head; seg != NULL && seg->backward == head->backward;
+        seg = list_next(segs, seg)) {
+        if (!isfinite(seg->end_pos.x) || !isfinite(seg->end_pos.y) ||
+            !isfinite(seg->end_hdg))
+            return B_FALSE;
+        if (seg->type == SEG_TYPE_STRAIGHT) {
+            if (!motion_envelope_straight(&distance, e.direction, seg->len,
+                seg->start_pos.x, seg->start_pos.y, seg->start_hdg,
+                seg == head, fixed.x, fixed.y))
+                return B_FALSE;
+        } else if (seg->type == SEG_TYPE_TURN) {
+            double omega = seg->backward ? veh->max_rev_ang_vel :
+                veh->max_fwd_ang_vel;
+            if (!motion_envelope_curve(&e, &distance, factor, omega,
+                veh->max_centr_accel, seg->start_pos.x, seg->start_pos.y,
+                seg->start_hdg, seg->end_hdg, seg->turn.r, seg->turn.right,
+                seg == head, fixed.x, fixed.y))
+                return B_FALSE;
+        } else {
+            return B_FALSE;
+        }
+    }
+    if (!motion_envelope_bound(&e, distance, factor * CRAWL_SPEED(bp_xp_ver,
+        veh), seg != NULL ? MOTION_BOUND_REVERSE : MOTION_BOUND_END))
+        return B_FALSE;
+    *out = e;
+    return B_TRUE;
+}
+
 double
 ang_vel_speed_limit(const vehicle_t *veh, double steer, double speed) {
     double turn_radius, ang_vel;

@@ -398,10 +398,55 @@ msgstr ""
 msgid "Fast Ground Handling"
 msgstr ""
 
-msgid "Skip artificial ground handling waits and animations, including disconnect after parking brake set. Does not change towing speed; use Pushback speed factor separately. Brake checks remain unchanged."
+msgid "Skip artificial ground handling waits and animations, including disconnect after parking brake set. Does not change towing speed; use Pushback speed separately. Brake checks remain unchanged."
 msgstr ""
 
-msgid "Pushback speed factor"
+msgid "Automatic movement stopped"
+msgstr ""
+
+msgid "Invalid fast steering sample"
+msgstr ""
+
+msgid "Nose gear lost ground contact"
+msgstr ""
+
+msgid "Invalid fast force sample"
+msgstr ""
+
+msgid "Missing nose gear steering sample"
+msgstr ""
+
+msgid "Fast pushback stopped: no forward progress"
+msgstr ""
+
+msgid "Fast pushback stopped: no valid braking envelope"
+msgstr ""
+
+msgid "Fast pushback stopped: braking envelope exceeded"
+msgstr ""
+
+msgid "Fast pushback stopped: aircraft not decelerating"
+msgstr ""
+
+msgid "Fast pushback stopped: invalid braking observation"
+msgstr ""
+
+msgid "Fast pushback stopped: invalid route command"
+msgstr ""
+
+msgid "Fast pushback stopped: simulator clock reset"
+msgstr ""
+
+msgid "Fast pushback stopped: invalid motion sample or time gap"
+msgstr ""
+
+msgid "Fast pushback stopped: shared cockpit connected"
+msgstr ""
+
+msgid "Fast pushback stopped: invalid measured motion"
+msgstr ""
+
+msgid "Pushback speed"
 msgstr ""
 
 msgid "Normal (1x)"
@@ -413,7 +458,7 @@ msgstr ""
 msgid "2x"
 msgstr ""
 
-msgid "Raises the cruising-speed limit of automatic pushback and towing. Tug, turn and stopping limits still apply. Does not change manual towing or ground handling. 2x does not guarantee half the total time. Saved changes apply to the next operation."
+msgid "Speeds up automatic pushback and towing, including turns, acceleration and deceleration. Does not change simulator speed, manual towing, ground handling or parking-brake checks. Saved changes apply to the next operation."
 msgstr ""
 
 #: src/bp.c:3433 src/bp.c:3437 src/bp.c:3454 src/bp.c:3456 src/bp.c:3457

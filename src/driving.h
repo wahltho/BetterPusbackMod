@@ -29,6 +29,7 @@
 #include <acfutils/avl.h>
 #include <acfutils/list.h>
 #include <acfutils/geom.h>
+#include "motion_envelope.h"
 #include "pushback_speed.h"
 
 #ifdef    __cplusplus
@@ -155,6 +156,23 @@ bool_t drive_segs_with_speed_limits(const vehicle_pos_t *pos,
     const vehicle_t *veh, list_t *segs, double *last_mis_hdg, double d_t,
     double *out_steer, double *out_speed, bool_t *out_decelerating,
     const drive_speed_limits_t *limits);
+
+/*
+ * Fast master route query; requires an active head, changes no route or
+ * controller state. Query BEFORE drive_segs (which can release the head).
+ * Supply real corrected pose, unscaled vehicle, signed physical aircraft
+ * longitudinal actual speed, positive physical cruise ceiling, the angle
+ * used by the actual force writer, and its signed last output (+forward).
+ * On failure, latch a motion fault before advancing; out is then unusable.
+ * On success, monitor once per real sample (not once per segment query),
+ * clamp the magnitude of F * reference demand to out->allowed_mps, then
+ * convert to tug m/s exactly once. Only out->intervene authorizes requesting
+ * out->brake_force_n instead of PI. Caller owns holds and reversal interlock.
+ */
+bool_t drive_route_envelope(const vehicle_pos_t *pos, const vehicle_t *veh,
+    const list_t *segs, double factor, double actual_mps, double requested_mps,
+    double steer_deg, double mass_kg, double force_cap_n, double last_force_n,
+    motion_envelope_t *out);
 
 double ang_vel_speed_limit(const vehicle_t *veh, double steer, double speed);
 

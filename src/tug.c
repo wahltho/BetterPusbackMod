@@ -1435,13 +1435,22 @@ tug_drive2point(tug_t *tug, vect2_t dst, double hdg) {
                          &tug->segs) >= 0);
 }
 
-void
-tug_run(tug_t *tug, double d_t, bool_t drive_slow) {
+static void
+tug_run_impl(tug_t *tug, double d_t, bool_t drive_slow, double factor,
+    double previous_speed) {
     double steer = 0, speed = 0;
     double accel, turn, radius;
+    double dt_motion = d_t;
+    double motion_speed = tug->pos.spd;
 
     if (tug->load_in_prog)
         return;
+
+    if (factor != 1) {
+        ASSERT(list_head(&tug->segs) == NULL);
+        dt_motion *= factor;
+        motion_speed = previous_speed / factor;
+    }
 
     if (list_head(&tug->segs) != NULL) {
         drive_segs(&tug->pos, drive_slow ? &tug->veh_slow : &tug->veh,
@@ -1457,23 +1466,24 @@ tug_run(tug_t *tug, double d_t, bool_t drive_slow) {
                            (1.1 - (steer / tug->veh.max_steer)));
     }
 
-    if (speed >= tug->pos.spd)
-        accel = MIN(speed - tug->pos.spd, TUG_MAX_ACCEL * d_t);
+    if (speed >= motion_speed)
+        accel = MIN(speed - motion_speed, TUG_MAX_ACCEL * dt_motion);
     else
-        accel = MAX(speed - tug->pos.spd, -TUG_MAX_ACCEL * d_t);
+        accel = MAX(speed - motion_speed, -TUG_MAX_ACCEL * dt_motion);
 
     if (steer >= tug->cur_steer)
-        turn = MIN(steer - tug->cur_steer, TUG_STEER_RATE * d_t);
+        turn = MIN(steer - tug->cur_steer, TUG_STEER_RATE * dt_motion);
     else
-        turn = MAX(steer - tug->cur_steer, -TUG_STEER_RATE * d_t);
+        turn = MAX(steer - tug->cur_steer, -TUG_STEER_RATE * dt_motion);
 
-    tug->pos.spd += accel;
+    motion_speed += accel;
+    tug->pos.spd = (factor == 1 ? motion_speed : motion_speed * factor);
     if (!tug->steer_override)
         tug->cur_steer += turn;
 
     radius = tan(DEG2RAD(90 - tug->cur_steer)) * tug->veh.wheelbase;
     if (radius > -1e3 && radius < 1e3) {
-        double d_hdg = RAD2DEG((tug->pos.spd / radius) * d_t);
+        double d_hdg = RAD2DEG((motion_speed / radius) * dt_motion);
         vect2_t p2c = VECT2(radius, tug->info->rear_z);
         vect2_t c2np = vect2_rot(vect2_neg(p2c), d_hdg);
         vect2_t d_pos = vect2_rot(vect2_add(p2c, c2np), tug->pos.hdg);
@@ -1486,7 +1496,7 @@ tug_run(tug_t *tug, double d_t, bool_t drive_slow) {
         if (!tug->info->anim_debug) {
             vect2_t dir = hdg2dir(tug->pos.hdg);
             tug->pos.pos = vect2_add(tug->pos.pos, vect2_scmul(dir,
-                                                               tug->pos.spd * d_t));
+                                                               motion_speed * dt_motion));
         }
     }
 
@@ -1527,6 +1537,21 @@ tug_run(tug_t *tug, double d_t, bool_t drive_slow) {
          */
         tug_set_TE_snd(tug, TE / 3, d_t);
     }
+}
+
+void
+tug_run(tug_t *tug, double d_t, bool_t drive_slow)
+{
+    tug_run_impl(tug, d_t, drive_slow, 1, 0);
+}
+
+/* First coupled heading increment only. The subsequent nose-gear update
+ * consumes physical speed and simulator dt, not this local motion clock. */
+void
+tug_run_attached(tug_t *tug, double d_t, double factor, double previous_speed)
+{
+    ASSERT(factor == 1.5 || factor == 2);
+    tug_run_impl(tug, d_t, B_FALSE, factor, previous_speed);
 }
 
 void

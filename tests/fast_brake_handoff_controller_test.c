@@ -116,6 +116,7 @@ static void nw_released(void) {}
 static void nw_new_operation(bool_t reconnect) { UNUSED(reconnect); }
 
 /* Compile the actual controller and completion functions, not copies. */
+static void motion_reset(void) {}
 #include "fast_brake_handoff_controller.inc"
 
 static void reset_test(bool fast_mode, bool slave, bool ignore, int lift_type)

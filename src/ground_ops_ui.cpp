@@ -345,6 +345,7 @@ collect_raw_state(void)
     raw.replan_available = (bp_can_replan() != B_FALSE);
     raw.pause_requested = (bp_pause_is_requested() != B_FALSE);
     raw.pause_held = (bp_pause_is_held() != B_FALSE);
+    raw.motion_fault = bp_motion_fault_reason();
     raw.clear_signal_displayed = bp.clear_signal_gate.displayed;
     raw.clear_signal_acknowledged = bp.clear_signal_gate.acknowledged;
     raw.disconnect_approved = bp.ok2disco != B_FALSE;
@@ -412,7 +413,8 @@ refresh_snapshot(void)
             snapshot->action_required ? "required" : "none",
             snapshot->caption_visible ? "active" : "none");
     }
-    if (snapshot->secondary_action != GROUND_OPS_ACTION_END_DISCONNECT)
+    if (snapshot->primary_action != GROUND_OPS_ACTION_END_DISCONNECT &&
+        snapshot->secondary_action != GROUND_OPS_ACTION_END_DISCONNECT)
         end_confirmation_armed = false;
 }
 

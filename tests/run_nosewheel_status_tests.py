@@ -49,20 +49,40 @@ roll_off = source[source.index("        case PB_STEP_MOVING_AWAY:",
 roll_off = "static void run_roll_off(void) { switch (bp.step) {\n" + roll_off \
     + "default: assert(false); } }\n"
 
-# An observational extension must leave existing mutation sites untouched.
+# The animation extension is observational. Motion now has additional
+# force/steer writers, but not additional gear, rotation or brake writers.
 baseline = subprocess.check_output(
     ["git", "show", "f8cd6251a428e7fc16e2d9a1ced1980973fd7198:src/bp.c"],
     cwd=repo, text=True
 )
+def sites(text, pattern):
+    return [re.sub(r"\s+", " ", line.replace("rate_count = ", "")).strip()
+            for line in text.splitlines() if re.search(pattern, line)]
+
+
+for pattern in (r"dr_set\w*\(&drs\.(?:leg_len|lbrake|rbrake|parkbrake)\b",
+                r"bp\.anim\.nosewheel_rot_spd\s*=",
+                r"dr_getvf32\(&drs\.tire_rot_spd",
+                r"^\s*brakes_set\(B_(?:TRUE|FALSE)\);"):
+    assert sites(source, pattern) == sites(baseline, pattern), pattern
+
+
+def custody_path(text):
+    owners = ("pb_step_connect_grab", "pb_step_connect_winch", "pb_step_lift",
+              "pb_step_lowering", "pb_step_ungrabbing_grab", "pb_step_ungrabbing_winch",
+              "pb_step_ungrabbing", "recon_handler")
+    dispatch = text[text.index("static float\nbp_run("):]
+    moving_away = dispatch[dispatch.index("        case PB_STEP_MOVING_AWAY:"):
+                           dispatch.index("        case PB_STEP_CLOSING_CRADLE:")]
+    return "\n".join(function(text, n) for n in owners) + "\n" + moving_away
+
+
 for pattern in (
     r"\b(?:dr_set\w*|brakes_set|push_at_speed|turn_nosewheel)\s*\(",
     r"bp\.(?:step\s*(?:\+\+|=)|anim\.nosewheel_rot_spd\s*=)",
     r"dr_getvf32\(&drs\.tire_rot_spd"
 ):
-    def mutation_sites(text):
-        return [re.sub(r"\s+", " ", line.replace("rate_count = ", "")).strip()
-                for line in text.splitlines() if re.search(pattern, line)]
-    assert mutation_sites(source) == mutation_sites(baseline), pattern
+    assert sites(custody_path(source), pattern) == sites(custody_path(baseline), pattern), pattern
 assert "crc64_rand" not in metadata and "crc64_srand" not in metadata
 for name in ("bp_start", "bp_stop", "bp_state_init", "bp_fini", "bp_complete"):
     assert "nw_" in function(source, name), name
