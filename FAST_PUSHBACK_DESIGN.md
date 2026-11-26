@@ -43,10 +43,17 @@ drive_segs erhaelt die echte Geometrie aus corr_acf_pos(), deren Geschwindigkeit
 geteilt durch F, das originale Profil nach pb_step_tug_load und F*dt als
 lokales Reglerintervall. Gerade, Kurve, Crawl, Overcorrection, rekursiver
 Lookahead und Vorzeichen bleiben damit im Referenzraum. F multipliziert
-den resultierenden longitudinalen Sollwert genau einmal. Vor der einmaligen
-Umrechnung auf Tugtempo mittels max(cos(nw_defl),0.1) greift Abschnitt 3.
-Kein zweiter unskalierter Tugcap. Reibungscaps MED/POOR bleiben hingegen
-absolute physische Tug-m/s-Grenzen. Bei Begrenzung ist Zeitgewinn nachrangig.
+den resultierenden longitudinalen Sollwert genau einmal. Der schnelle Regler
+und die Bremshuelle verwenden beide Flugzeug-Laengsgeschwindigkeiten.
+Nur 1x rechnet den Sollwert auf Tugtempo um. Die physischen Tug-m/s-Grenzen
+MED/POOR werden fuer Fast mit max(cos(nw_defl),0.1) in den Laengsrahmen
+projiziert. Bei Begrenzung ist Zeitgewinn nachrangig.
+
+Nur bei 2x endet das Lenken entlang der Route mit einem gleitenden Uebergang
+zum Endkurs am letzten Segment. Der feste Achspunkt und bei Boegen auch die
+verbleibende Bogenlaenge bestimmen das Endfenster. Der Uebergang aendert
+nur den Lenkbefehl, nicht Segmentfreigabe, Geschwindigkeitslimit oder
+Stillstands- und Parkbremsbedingungen.
 
 Weg, Radius und Lenkwinkel unveraendert; Geschwindigkeiten und Gierraten
 physisch mal F, nominale Beschleunigungen mal F^2. Bei 2x also 1.00 statt
@@ -55,8 +62,8 @@ Das haelt ideal v^2/(2*a) konstant, garantiert aber keinen realen Bremsweg.
 
 **G1: begrenzter Geschwindigkeitsregler statt F^3-Kraftschritten.** Nur im
 Fastzweig von push_at_speed einen physischen PI-Geschwindigkeitsregler
-verwenden. v ist die signierte reale Ausgabe von tug_speed(), u der begrenzte
-Tugsollwert. Je echtem Sample: e=u-v; A=F^2*max_accel des Aufrufers;
+verwenden. v ist die signierte gemessene Flugzeug-Laengsgeschwindigkeit
+bp.cur_pos.spd, u der begrenzte Laengssollwert. Je echtem Sample: e=u-v; A=F^2*max_accel des Aufrufers;
 a_cmd=clamp(kp*e+I,-A,A), kp=2*F/s, ki=F^2/s^2. I hat die Einheit m/s^2.
 Die Integrationsaenderung ki*e*dt nur uebernehmen, wenn sie Beschleunigungs-,
 Kraft- oder Rampensaettigung nicht weiter vertieft (oder aus ihr herausfuehrt).

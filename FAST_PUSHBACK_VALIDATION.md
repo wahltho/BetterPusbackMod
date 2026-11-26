@@ -1,5 +1,62 @@
 # Fast Pushback: Source- und Trockentestnachweis
 
+## Endausrichtung bei 2x, 2026-11-26
+
+Das vorherige Endfenster galt nur auf einem geraden Schlusssegment und
+bezog sich auf den Flugzeugursprung. Ein frueherer Null-Lenkbefehl allein
+verbesserte nicht alle KSEA-Laeufe. Im neuen 2x-Fenster geht die Lenkung
+am festen Fahrwerkspunkt kontinuierlich vom Routensoll zum Endkurssoll
+ueber. Es ist auf eine halbe Radbasis, hoechstens das halbe Schlusssegment
+und im Bogen zusaetzlich auf dessen letzte 15 Grad begrenzt. Keine
+Aenderung an Geschwindigkeits-, Brems-, Abschluss- oder Testschwellen.
+
+Alle 45 Routenkombinationen bestanden mit dem regulaeren STARTING-Frame,
+Stillstand, Zeitgewinn und den zuvor festgelegten Endlagenkriterien. Bei
+30 FPS (2x, Sekunden bis zum Stillstand / Endabstand im ebenen Testmodell):
+KSEA N16 39,20 s / 2,555 m; BGTL 43,93 s / 2,535 m; KBNA 55,17 s /
+2,051 m. Gegen den vorherigen Laengsregler ohne 2x-Endfenster waren die
+1x-Traces (70.508 Frames) und 1,5x-Traces (49.426 Frames) bytegleich.
+Das ist ein Trockentest, keine Abnahme in X-Plane.
+
+## Kurvenfahrt mit Laengsregelung, 2026-11-25
+
+Vergleich mit `c130669`: Bei KSEA N16 (30 FPS, 2x) stoppte der alte
+Regler nach 5,10 s. In der Kurve forderte er weiter Zug an, obwohl das
+Flugzeug die Abschaltschwelle fuer die Laengsgeschwindigkeit erreichte.
+Der korrigierte schnelle Regler verwendet denselben Geschwindigkeitsbezug
+wie die unveraenderte Bremshuelle. Die MED/POOR-Grenzen bleiben in
+Schlepper-m/s definiert; ihre Projektion ist bei 60 Grad in beiden
+Richtungen separat getestet.
+
+Planarer Trockentest mit den gespeicherten Routen und AST-3F, Zeit von
+Bewegungsbeginn bis zum Stillstand bei 30 FPS (Sekunden):
+
+| Start | 1x | 1,5x | 2x |
+| --- | ---: | ---: | ---: |
+| KSEA N16 | 76,77 | 52,80 | 40,67 |
+| BGTL Military Ramp 1 | 86,77 | 60,67 | 46,57 |
+| KBNA C4 | 105,77 | 72,60 | 55,40 |
+
+Alle 45 Kombinationen aus Route, Faktor und 20/30/60/120/variablen FPS
+erreichten im Diagnoselauf Routenende und Stillstand ohne Fehlerhalt. Im
+direkten Vergleich mit `c130669` waren die Controller-Traces aller 15
+1x-Laeufe bytegleich (70.508 Frames).
+
+**Damals gesperrter Zwischenstand.** Die erste Regression auf macOS und Linux bestand,
+deckte bei Bogenenden aber nicht den regulaeren STARTING-Frame fuer die
+spaetere Endausrichtung ab. Der erweiterte Test prueft auch Endpose und
+Zeitgewinn. Alle 15 Fast-Laeufe mit 1,5x bestehen. Bei 2x ueberschreiten
+KSEA (20/30/variable FPS) und KBNA (20 FPS) die Grenze fuer den
+Positionsfehler (hoechstens 0,5 m mehr als bei 1x). Groesste Differenz:
+1,058 m, KSEA variable FPS. Die Schwelle wurde nicht erhoeht.
+
+KSEA, 30 FPS: bei Freigabe des letzten Segments 0,498 m / 0,496 m
+Endabstand (1x/2x), beim Stillstand nach Endausrichtung 2,861 m / 3,492 m.
+Der Fehler entsteht beim zusaetzlichen Fahren zum Geradestellen, nicht
+beim beobachteten Ueberschreiten der Geschwindigkeitsgrenze im ersten Bogen.
+Eine isolierte Probe mit normalem Kriechtempo allein genuegte nicht.
+Keine Aenderung am Ausrichtungsablauf und keine Simulatorabnahme.
+
 ## Lokale Bewegungsskalierung, 2026-11-25
 
 Referenz: `72a329537104c93b432859cc1600136f653aa187`. Anders als beim

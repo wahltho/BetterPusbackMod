@@ -2153,7 +2153,7 @@ push_at_speed_fast(double raw_target, double target, double max_accel,
     double *applied)
 {
     bp_motion_force_t cmd;
-    double mass, speed, weight = 0, fx, fz, axial, yaw, pitch;
+    double mass, weight = 0, fx, fz, axial, yaw, pitch;
     int contact;
 
     if (motion.reanchor)
@@ -2175,10 +2175,9 @@ push_at_speed_fast(double raw_target, double target, double max_accel,
     if (bp_motion_fault_held() && target != 0)
         return (B_FALSE);
 
-    speed = tug_speed();
     mass = dr_getf(&drs.acf_mass);
     if (!bp_motion_pi(factor, bp.d_t, mass, FORCE_PER_TON, max_accel,
-        target, speed, bp.motion_integral, bp.last_force,
+        target, bp.cur_pos.spd, bp.motion_integral, bp.last_force,
         bp.motion_brake_force, &cmd))
         goto invalid;
 
@@ -2237,6 +2236,7 @@ push_at_speed(double targ_speed, double max_accel, bool_t allow_snd_ctl,
     double cur_spd, nose_down_moment;
     double raw_targ_speed = targ_speed;
     double factor = motion_factor();
+    double surface_limit = 0;
 
     if (factor != 1) {
         if (dr_getvf(&drs.tire_steer_cmd, &steer, bp.acf.nw_i, 1) != 1) {
@@ -2252,18 +2252,24 @@ push_at_speed(double targ_speed, double max_accel, bool_t allow_snd_ctl,
      */
     switch (dr_geti(&drs.rwy_friction)) {
         case RWY_FRICTION_MED:
-            targ_speed = MIN(MAX(targ_speed, -MAX_SPEED_MED_FRICTION),
-                             MAX_SPEED_MED_FRICTION);
+            surface_limit = MAX_SPEED_MED_FRICTION;
             break;
         case RWY_FRICTION_POOR:
-            targ_speed = MIN(MAX(targ_speed, -MAX_SPEED_POOR_FRICTION),
-                             MAX_SPEED_POOR_FRICTION);
+            surface_limit = MAX_SPEED_POOR_FRICTION;
             break;
+    }
+    if (surface_limit > 0) {
+        if (factor != 1) {
+            /* Preserve the legacy tug-speed cap in longitudinal units. */
+            double defl = rel_hdg(bp.cur_pos.hdg, bp_ls.tug->pos.hdg);
+            surface_limit *= MAX(cos(DEG2RAD(defl)), 0.1);
+        }
+        targ_speed = MIN(MAX(targ_speed, -surface_limit), surface_limit);
     }
 
     /*
-     * The fast caller supplied an already physical tug target. Only the
-     * absolute surface limit above is shared with the legacy controller.
+     * Fast targets are signed aircraft-longitudinal speeds, in the same
+     * frame as the movement envelope. The applied force still follows the tug.
      */
     if (factor != 1) {
         if (!push_at_speed_fast(raw_targ_speed, targ_speed, max_accel,
@@ -3155,6 +3161,50 @@ nearing_end(void) {
     return (long_displ > -NEARING_END_THRESHOLD);
 }
 
+static double
+motion_end_course_steer(double rhdg, bool_t backward)
+{
+    double amp = fx_lin(bp.veh.wheelbase / bp_ls.tug->veh.wheelbase,
+        1, 3, 5, 10);
+    return (backward ? -1 : 1) * rhdg * MAX(MIN(amp, 10), 2);
+}
+
+/* Preview the final heading over half an aircraft wheelbase. Stay on
+ * route steering for at least the first half of even a short segment. */
+static bool_t
+motion_terminal_steer(const seg_t *seg, const vehicle_pos_t *pos, double *steer)
+{
+    if (seg != list_tail(&bp.segs) || pos->spd * (seg->backward ? -1 : 1) <= 0)
+        return B_FALSE;
+    double err = rel_hdg(pos->hdg, seg->end_hdg);
+    if (fabs(err) >= 90)
+        return B_FALSE;
+    vect2_t fixed = bp.veh.use_rear_pos ? vect2_add(pos->pos,
+        vect2_scmul(hdg2dir(pos->hdg), bp.veh.fixed_z_off)) : pos->pos;
+    double dist = vect2_dist(fixed, seg->end_pos);
+    double lead = bp.veh.wheelbase * 0.5;
+    if (seg->type == SEG_TYPE_TURN) {
+        int sense = (seg->turn.right != seg->backward) ? 1 : -1;
+        double length = DEG2RAD(motion_envelope_sweep(seg->start_hdg,
+            seg->end_hdg, sense)) * seg->turn.r;
+        lead = fmin(lead, fmin(length * 0.5, DEG2RAD(15) * seg->turn.r));
+        double arc = motion_envelope_arc_m(seg->start_pos.x, seg->start_pos.y,
+            seg->start_hdg, seg->end_hdg, seg->turn.r, seg->turn.right,
+            seg->backward, true, fixed.x, fixed.y);
+        /* The chord alone is ambiguous near the start of a long turn. */
+        if (!isfinite(arc) || arc > lead)
+            return B_FALSE;
+    } else {
+        lead = fmin(lead, seg->len * 0.5);
+    }
+    if (!(lead > 0 && dist < lead))
+        return B_FALSE;
+    double end_steer = motion_end_course_steer(err, seg->backward);
+    end_steer = bp_motion_clamp(end_steer, -bp.veh.max_steer, bp.veh.max_steer);
+    *steer += (1 - dist / lead) * (end_steer - *steer);
+    return B_TRUE;
+}
+
 /*
  * We need to compute a fake position for drive_segs. This is because when
  * steering, we don't actually perform simple steering around our nosewheel.
@@ -3409,8 +3459,6 @@ bp_run_push(bool_t hold_requested) {
         bool_t driving = drive_segs(&ref_pos, &bp.veh, &bp.segs,
             &bp.last_mis_hdg, dt, &steer, &speed, &decel);
         if (driving) {
-            double nw_defl;
-
             if (factor > 1) {
                 if (!isfinite(steer) || !isfinite(speed))
                     motion_invalid_sample("Fast pushback stopped: invalid route command");
@@ -3423,23 +3471,11 @@ bp_run_push(bool_t hold_requested) {
             }
             bp_telem.route_steer_cmd_deg = steer;
             telemetry_route_tracking(seg, &corr_pos);
-            if (!nearing_end()) {
-                bp_telem.applied_steer_cmd_deg = steer;
-                turn_nosewheel(steer);
-            } else {
-                /*
-                 * When nearing the end of the route, start neutralizing
-                 * steering early to avoid overshooting the final pose.
-                 */
-                bp_telem.applied_steer_cmd_deg = 0;
-                turn_nosewheel(0);
-            }
-            /*
-             * Since the drive_segs function returns a longitudinal
-             * speed, but push_at_speed controls speed based on the
-             * tug's angle, so we need to correct for that.
-             */
-            nw_defl = rel_hdg(bp.cur_pos.hdg, bp_ls.tug->pos.hdg);
+            if (!(factor == 2 && !hold_requested &&
+                motion_terminal_steer(seg, &corr_pos, &steer)) && nearing_end())
+                steer = 0;
+            bp_telem.applied_steer_cmd_deg = steer;
+            turn_nosewheel(steer);
             if (factor > 1 && !hold_requested) {
                 /* G1 will use the angle just written by turn_nosewheel. */
                 double applied;
@@ -3461,7 +3497,11 @@ bp_run_push(bool_t hold_requested) {
                 motion.envelope_watch.was_intervening = env.intervene;
                 motion.envelope_watch.previous_brake_n = env.brake_force_n;
             }
-            speed /= MAX(cos(DEG2RAD(nw_defl)), 0.1);
+            if (factor == 1) {
+                /* Only the legacy regulator measures speed along the tug. */
+                double nw_defl = rel_hdg(bp.cur_pos.hdg, bp_ls.tug->pos.hdg);
+                speed /= MAX(cos(DEG2RAD(nw_defl)), 0.1);
+            }
             if (hold_requested) {
                 /*
                  * Keep running route and steering control while slowing so
@@ -4332,10 +4372,7 @@ pb_step_stopping(void) {
             corr_pos = corr_acf_pos();
             if (!isnan(bp.last_hdg) &&
             fabs(rhdg = rel_hdg(corr_pos.hdg, bp.last_hdg)) > 1) {
-                double amp = fx_lin(bp.veh.wheelbase /
-                                    bp_ls.tug->veh.wheelbase, 1, 3, 5, 10);
-                double nsteer = (bp.last_seg_is_back ? -1 : 1) * rhdg *
-                                MAX(MIN(amp, 10), 2);
+                double nsteer = motion_end_course_steer(rhdg, bp.last_seg_is_back);
                 stopping_alignment(&corr_pos, nsteer, factor);
                 done = B_FALSE;
             } else if (ABS(bp_ls.tug->cur_steer) >

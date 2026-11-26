@@ -254,6 +254,9 @@ static arc_sample_t arc_sample(double f, double dt, int dir, int side)
     assert(list_count(&bp.segs) == 1 && bp_telem.command_active);
     arc_sample_t sample = {bp_telem.target_speed_limited_mps,
         bp_telem.applied_steer_cmd_deg, tug.cur_steer};
+    /* Compare both outputs in the aircraft's longitudinal frame. */
+    if (f == 1)
+        sample.target *= cos(DEG2RAD(rel_hdg(bp.cur_pos.hdg, tug.pos.hdg)));
     assert(dir * sample.target > 0.4*f && fabs(sample.request) > 0.01);
     finish_fixture(); return sample;
 }
@@ -275,14 +278,52 @@ static void curvature_and_zero_steer(double f, int dir, int side)
     finish_fixture();
 }
 
+static void terminal_preview_gates(void)
+{
+    for (int dir = -1; dir <= 1; dir += 2) {
+        reset_controller(2, dir < 0, 4);
+        seg_t *s = list_head(&bp.segs);
+        vehicle_pos_t p = {.pos = {0, dir}, .hdg = 0, .spd = dir};
+        double command = 24;
+        assert(!motion_terminal_steer(s, &p, &command) && command == 24);
+        p.pos.y = 3*dir;
+        seg_t *next = calloc(1, sizeof(*next)); assert(next);
+        list_insert_tail(&bp.segs, next);
+        assert(!motion_terminal_steer(s, &p, &command) && command == 24);
+        list_remove(&bp.segs, next); free(next);
+        p.spd = -dir;
+        assert(!motion_terminal_steer(s, &p, &command) && command == 24);
+        p.spd = dir;
+        assert(motion_terminal_steer(s, &p, &command));
+        close_to(command, 12, 1e-12);
+        /* Near the endpoint geometrically, but at the start of a nearly
+         * complete circle: do not anticipate the last few degrees here. */
+        s->type = SEG_TYPE_TURN; s->turn.right = dir > 0; s->turn.r = 20;
+        s->end_hdg = 359; s->end_pos = s->start_pos; p.pos = s->start_pos;
+        assert(!motion_terminal_steer(s, &p, &command) && command == 12);
+        finish_fixture();
+    }
+}
+
 static void lifecycle_tests(void)
 {
     config_and_start();
+    terminal_preview_gates();
     for (double f = 1.5; f <= 2; f += 0.5) {
         for (int dir = -1; dir <= 1; dir += 2)
         for (int side = -1; side <= 1; side += 2) {
             heading_history(f, dir, side);
             curvature_and_zero_steer(f, dir, side);
+            reset_controller(f, dir < 0, 500); arm_push();
+            tug.pos.hdg = normalize_hdg(60 * side);
+            drs.tire_steer_cmd = 60 * side;
+            for (int poor = 0; poor <= 1; poor++) {
+                drs.rwy_friction = poor ? RWY_FRICTION_POOR : RWY_FRICTION_MED;
+                push_at_speed(dir * 4, bp.veh.max_accel, B_FALSE, B_FALSE);
+                close_to(bp_telem.target_speed_limited_mps, dir * 0.5 *
+                    (poor ? MAX_SPEED_POOR_FRICTION : MAX_SPEED_MED_FRICTION), 1e-9);
+            }
+            finish_fixture();
         }
         for (int fault = 0; fault <= 4; fault++) fault_and_hold(f, fault);
         for (int gate = 0; gate < 5; gate++) {
@@ -402,6 +443,8 @@ static trip_t trip(double f, int back, double length, int cadence, FILE *trace, 
     assert(t.time > 0); finish_fixture(); return t;
 }
 
+#include "curved_route_regression.h"
+
 static void closed_loop_tests(const char *trace, const char *prefix)
 {
     FILE *out = fopen(trace, "ab"); assert(out);
@@ -427,6 +470,25 @@ static void closed_loop_tests(const char *trace, const char *prefix)
         }
 #else
         (void)base;
+#endif
+    }
+    for (size_t r = 0; r < sizeof(curved_routes)/sizeof(curved_routes[0]); r++)
+    for (int cadence = 0; cadence < 5; cadence++) {
+        curved_result_t ref = curved_route_trip(&curved_routes[r], 1, cadence, out);
+#if !FROZEN
+        for (double f = 1.5; f <= 2; f += 0.5) {
+            curved_result_t fast = curved_route_trip(&curved_routes[r], f, cadence, NULL);
+            assert(fast.time < ref.time);
+            /* Compare endpoint errors, not offsets from a possibly imperfect
+             * reference stop. Allow half a metre for the faster stop. */
+            assert(fast.end_error <= ref.end_error + 0.5);
+            if (!curved_routes[r].turn_first)
+                assert(fast.heading_error <= 1.0);
+            else
+                assert(fast.heading_error <= ref.heading_error + 1.0);
+        }
+#else
+        (void)ref;
 #endif
     }
     assert(fclose(raw) == 0 && fclose(out) == 0 && !pose_misses);
